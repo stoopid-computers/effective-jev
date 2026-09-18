@@ -1,18 +1,108 @@
-import { requestIdFrom } from "./api-promise";
-import { parseRetryAfter } from "./retry";
+import { Schema } from "effect";
+import type { Headers } from "effect/unstable/http";
 
-/** Base class for SDK errors. */
-export class TypeSafeError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = new.target.name;
-  }
-}
+/** Invalid client configuration, including missing credentials. */
+export class TypeSafeConfigError extends Schema.TaggedError<TypeSafeConfigError>()(
+  "TypeSafeConfigError",
+  { message: Schema.String },
+) {}
+
+/** Invalid questions, request options, or a body that cannot be encoded as JSON. */
+export class InvalidRequestError extends Schema.TaggedError<InvalidRequestError>()(
+  "InvalidRequestError",
+  { message: Schema.String, cause: Schema.optional(Schema.Defect()) },
+) {}
+
+/** A successful HTTP response that does not match the requested answer schema. */
+export class ResponseValidationError extends Schema.TaggedError<ResponseValidationError>()(
+  "ResponseValidationError",
+  {
+    message: Schema.String,
+    cause: Schema.Defect(),
+    requestId: Schema.UndefinedOr(Schema.String),
+  },
+) {}
+
+/** The transport failed while sending a request or receiving its body. */
+export class APIConnectionError extends Schema.TaggedError<APIConnectionError>()(
+  "APIConnectionError",
+  { message: Schema.String, cause: Schema.Defect() },
+) {}
+
+/** An attempt exceeded its timeout, including response body delivery. */
+export class APITimeoutError extends Schema.TaggedError<APITimeoutError>()("APITimeoutError", {
+  message: Schema.String,
+  timeoutMs: Schema.Number,
+}) {}
+
+const apiErrorFields = {
+  message: Schema.String,
+  status: Schema.Number,
+  headers: Schema.Record(Schema.String, Schema.String),
+  body: Schema.Unknown,
+  requestId: Schema.UndefinedOr(Schema.String),
+};
+
+/** An HTTP error without a more specific status tag. */
+export class APIError extends Schema.TaggedError<APIError>()("APIError", apiErrorFields) {}
+/** HTTP 400. */
+export class BadRequestError extends Schema.TaggedError<BadRequestError>()(
+  "BadRequestError",
+  apiErrorFields,
+) {}
+/** HTTP 401. */
+export class AuthenticationError extends Schema.TaggedError<AuthenticationError>()(
+  "AuthenticationError",
+  apiErrorFields,
+) {}
+/** HTTP 403. */
+export class PermissionDeniedError extends Schema.TaggedError<PermissionDeniedError>()(
+  "PermissionDeniedError",
+  apiErrorFields,
+) {}
+/** HTTP 404. */
+export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
+  "NotFoundError",
+  apiErrorFields,
+) {}
+/** HTTP 422. */
+export class UnprocessableEntityError extends Schema.TaggedError<UnprocessableEntityError>()(
+  "UnprocessableEntityError",
+  apiErrorFields,
+) {}
+/** HTTP 429, with the server's requested delay in milliseconds when valid. */
+export class RateLimitError extends Schema.TaggedError<RateLimitError>()("RateLimitError", {
+  ...apiErrorFields,
+  retryAfterMs: Schema.UndefinedOr(Schema.Number),
+}) {}
+/** HTTP 5xx. */
+export class InternalServerError extends Schema.TaggedError<InternalServerError>()(
+  "InternalServerError",
+  apiErrorFields,
+) {}
+
+/** All failures returned for non-success HTTP statuses. */
+export type APIResponseError =
+  | APIError
+  | BadRequestError
+  | AuthenticationError
+  | PermissionDeniedError
+  | NotFoundError
+  | UnprocessableEntityError
+  | RateLimitError
+  | InternalServerError;
+
+/** The error channel of client requests. Fiber interruption remains an interruption. */
+export type TypeSafeError =
+  | APIResponseError
+  | APIConnectionError
+  | APITimeoutError
+  | InvalidRequestError
+  | ResponseValidationError;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-/** Extract a message from a text, error, or validation response body. */
 const extractMessage = (body: unknown): string | undefined => {
   if (typeof body === "string") return body || undefined;
   if (!isRecord(body)) return undefined;
@@ -22,101 +112,46 @@ const extractMessage = (body: unknown): string | undefined => {
   if (typeof message === "string") return message;
   if (typeof detail === "string") return detail;
   if (isRecord(detail) && typeof detail.message === "string") return detail.message;
-  if (Array.isArray(detail)) return describeValidationErrors(detail);
-  return undefined;
-};
-
-/** Format validation errors as semicolon-separated `path: message` entries. */
-const describeValidationErrors = (errors: unknown[]): string | undefined => {
-  const parts = errors.flatMap((e) => {
-    if (!isRecord(e) || typeof e.msg !== "string") return [];
-    const loc = Array.isArray(e.loc) ? e.loc.filter((x) => x !== "body").join(".") : "";
-    return [loc ? `${loc}: ${e.msg}` : e.msg];
+  if (!Array.isArray(detail)) return undefined;
+  const parts = detail.flatMap((entry) => {
+    if (!isRecord(entry) || typeof entry.msg !== "string") return [];
+    const path = Array.isArray(entry.loc)
+      ? entry.loc.filter((key) => key !== "body").join(".")
+      : "";
+    return [path ? `${path}: ${entry.msg}` : entry.msg];
   });
   return parts.length > 0 ? parts.join("; ") : undefined;
 };
 
-const MAX_RAW_BODY_IN_MESSAGE = 200;
-
-/** An unsuccessful HTTP response from the API. */
-export class APIError extends TypeSafeError {
-  /** HTTP response status code. */
-  readonly status: number;
-  /** HTTP response headers. */
-  readonly headers: Headers;
-  /** Parsed JSON, response text, or `undefined` for an empty body. */
-  readonly body: unknown;
-  /** Request ID from `x-typesafe-request-id`, or `undefined` when absent. */
-  readonly requestId: string | undefined;
-
-  constructor(status: number, body: unknown, headers: Headers, message?: string) {
-    super(message ?? APIError.describe(status, body));
-    this.status = status;
-    this.body = body;
-    this.headers = headers;
-    this.requestId = requestIdFrom(headers);
+/** Convert an HTTP failure to a tagged error without losing its body or request ID. */
+export const fromResponse = (
+  status: number,
+  body: unknown,
+  headers: Headers.Headers,
+  retryAfterMs: number | undefined,
+): APIResponseError => {
+  const detail = extractMessage(body);
+  const raw = typeof body === "string" ? body : JSON.stringify(body);
+  const message = detail
+    ? `${status} ${detail}`
+    : raw === undefined
+      ? `${status} status code (no body)`
+      : `${status} ${raw.length > 200 ? `${raw.slice(0, 200)}…` : raw}`;
+  const fields = { status, body, headers, message, requestId: headers["x-typesafe-request-id"] };
+  switch (status) {
+    case 400:
+      return new BadRequestError(fields);
+    case 401:
+      return new AuthenticationError(fields);
+    case 403:
+      return new PermissionDeniedError(fields);
+    case 404:
+      return new NotFoundError(fields);
+    case 422:
+      return new UnprocessableEntityError(fields);
+    case 429:
+      return new RateLimitError({ ...fields, retryAfterMs });
+    default:
+      return status >= 500 ? new InternalServerError(fields) : new APIError(fields);
   }
-
-  private static describe(status: number, body: unknown): string {
-    const detail = extractMessage(body);
-    if (detail) return `${status} ${detail}`;
-    if (body === undefined) return `${status} status code (no body)`;
-    const raw = typeof body === "string" ? body : JSON.stringify(body);
-    return `${status} ${raw.length > MAX_RAW_BODY_IN_MESSAGE ? `${raw.slice(0, MAX_RAW_BODY_IN_MESSAGE)}…` : raw}`;
-  }
-
-  /** Create the error subclass for an HTTP status code. */
-  static fromResponse(status: number, body: unknown, headers: Headers): APIError {
-    if (status === 400) return new BadRequestError(status, body, headers);
-    if (status === 401) return new AuthenticationError(status, body, headers);
-    if (status === 403) return new PermissionDeniedError(status, body, headers);
-    if (status === 404) return new NotFoundError(status, body, headers);
-    if (status === 422) return new UnprocessableEntityError(status, body, headers);
-    if (status === 429) return new RateLimitError(status, body, headers);
-    if (status >= 500) return new InternalServerError(status, body, headers);
-    return new APIError(status, body, headers);
-  }
-}
-
-/** HTTP 400: the request is invalid. */
-export class BadRequestError extends APIError {}
-/** HTTP 401: authentication failed. */
-export class AuthenticationError extends APIError {}
-/** HTTP 403: access is denied. */
-export class PermissionDeniedError extends APIError {}
-/** HTTP 404: the resource was not found. */
-export class NotFoundError extends APIError {}
-/** HTTP 422: request validation failed. */
-export class UnprocessableEntityError extends APIError {}
-/** HTTP 429: the rate limit was exceeded. */
-export class RateLimitError extends APIError {
-  /** Server retry delay in milliseconds, or `undefined` when absent or invalid. */
-  readonly retryAfterMs: number | undefined = parseRetryAfter(this.headers);
-}
-/** HTTP 5xx: the server failed to handle the request. */
-export class InternalServerError extends APIError {}
-
-/** The request or response-body delivery failed (DNS, TLS, connection closed, etc.). */
-export class APIConnectionError extends TypeSafeError {
-  constructor(message = "Connection error.", options?: ErrorOptions) {
-    super(message, options);
-  }
-}
-
-/** The full response did not arrive within the timeout. A kind of `APIConnectionError`. */
-export class APITimeoutError extends APIConnectionError {
-  /** Configured timeout in milliseconds. */
-  readonly timeoutMs: number;
-
-  constructor(timeoutMs: number, options?: ErrorOptions) {
-    super(`Request timed out after ${timeoutMs}ms.`, options);
-    this.timeoutMs = timeoutMs;
-  }
-}
-
-/** The caller cancelled the request through an `AbortSignal`. */
-export class APIUserAbortError extends TypeSafeError {
-  constructor(message = "Request was aborted.", options?: ErrorOptions) {
-    super(message, options);
-  }
-}
+};

@@ -1,598 +1,211 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import { Cause, Deferred, Effect, Exit, Fiber } from "effect";
+import { TestClock } from "effect/testing";
+import { HttpClientError } from "effect/unstable/http";
+import { noul, type RequestOptions } from "../src";
 import {
-  APIConnectionError,
-  APIError,
-  APITimeoutError,
-  APIUserAbortError,
-  BadRequestError,
-  InternalServerError,
-  type Logger,
-  RateLimitError,
-  type RetryPolicy,
-  TypeSafeClient,
-  TypeSafeError,
-} from "../src";
-import { DEFAULT_RETRY_POLICY } from "../src/retry";
-import { json, mockFetch } from "./helpers";
-
-const MODELS = [{ name: "m", description: "d", release_date: "2026" }];
-
-const infoLogger = (): Logger & { lines: string[] } => {
-  const lines: string[] = [];
-  const at = (m: string) => {
-    lines.push(m);
-  };
-  return { lines, debug: () => {}, info: at, warn: at, error: at };
-};
-
-/** Settle a promise by draining pending fake timers. */
-const settle = async <T>(p: Promise<T>): Promise<T> => {
-  // Attach a handler first so a rejection is never left unobserved while timers run.
-  const guarded = p.then(
-    (v) => ({ ok: true as const, v }),
-    (e: unknown) => ({ ok: false as const, e }),
-  );
-  await vi.runAllTimersAsync();
-  const r = await guarded;
-  if (r.ok) return r.v;
-  throw r.e;
-};
+  ANSWER,
+  jsonResponse,
+  MODEL,
+  MODEL_BODY,
+  makeClient,
+  mockHttp,
+  requestBody,
+} from "./helpers";
 
 describe("retries", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.spyOn(Math, "random").mockReturnValue(0); // no jitter: delays are exactly 500, 1000, 2000...
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-
-  it("retries a 429 and then succeeds, honoring Retry-After", async () => {
-    const logger = infoLogger();
-    let calls = 0;
-    const { fetch, requests } = mockFetch(() =>
-      ++calls === 1
-        ? json({}, { status: 429, headers: { "retry-after": "2" } })
-        : json({ models: MODELS }),
-    );
-    const client = new TypeSafeClient({ apiKey: "k", fetch, logger, logLevel: "info" });
-
-    const p = client.models.list();
-    await vi.advanceTimersByTimeAsync(1999);
-    expect(requests).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(await settle(p)).toEqual(MODELS);
-
-    expect(requests).toHaveLength(2);
-    expect(logger.lines).toEqual([
-      expect.stringMatching(/^#1 GET \/v1\/models <- 429 in \d+ms$/),
-      "#1 GET /v1/models retrying in 2000ms (retry 1/2) after 429",
-      expect.stringMatching(/^#1 GET \/v1\/models <- 200 in \d+ms$/),
-    ]);
-  });
-
-  it("uses exponential backoff when there is no Retry-After", async () => {
-    let calls = 0;
-    const { fetch, requests } = mockFetch(() =>
-      ++calls <= 2 ? json({}, { status: 503 }) : json({ models: MODELS }),
-    );
-    const client = new TypeSafeClient({ apiKey: "k", fetch });
-
-    const p = client.models.list();
-    await vi.advanceTimersByTimeAsync(499);
-    expect(requests).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(requests).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(999);
-    expect(requests).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(requests).toHaveLength(3);
-    expect(await settle(p)).toEqual(MODELS);
-  });
-
-  it("gives up after maxRetries and throws the last error", async () => {
-    const { fetch, requests } = mockFetch(() => json({ message: "down" }, { status: 500 }));
-    const client = new TypeSafeClient({ apiKey: "k", fetch, retry: { maxRetries: 3 } });
-    await expect(settle(client.models.list())).rejects.toBeInstanceOf(InternalServerError);
-    expect(requests).toHaveLength(4);
-  });
-
-  it("does not retry non-retryable statuses", async () => {
-    const { fetch, requests } = mockFetch(() => json({}, { status: 400 }));
-    const client = new TypeSafeClient({ apiKey: "k", fetch });
-    await expect(settle(client.models.list())).rejects.toBeInstanceOf(BadRequestError);
-    expect(requests).toHaveLength(1);
-  });
-
-  it("retries connection errors", async () => {
-    let calls = 0;
-    const { fetch, requests } = mockFetch(() => {
-      if (++calls === 1) throw new TypeError("fetch failed");
-      return json({ models: MODELS });
-    });
-    const client = new TypeSafeClient({ apiKey: "k", fetch });
-    expect(await settle(client.models.list())).toEqual(MODELS);
-    expect(requests).toHaveLength(2);
-  });
-
-  it("never retries a caller abort", async () => {
-    const ac = new AbortController();
-    const { fetch, requests } = mockFetch(() => {
-      ac.abort();
-      throw new DOMException("aborted", "AbortError");
-    });
-    const client = new TypeSafeClient({ apiKey: "k", fetch });
-    await expect(settle(client.models.list({ signal: ac.signal }))).rejects.toBeInstanceOf(
-      APIUserAbortError,
-    );
-    expect(requests).toHaveLength(1);
-  });
-
-  it("aborting during the backoff wait throws APIUserAbortError", async () => {
-    const ac = new AbortController();
-    const { fetch, requests } = mockFetch(() => json({}, { status: 503 }));
-    const client = new TypeSafeClient({ apiKey: "k", fetch });
-    const p = client.models.list({ signal: ac.signal });
-    const guarded = p.catch((e: unknown) => e);
-    await vi.advanceTimersByTimeAsync(100);
-    ac.abort();
-    expect(await guarded).toBeInstanceOf(APIUserAbortError);
-    expect(requests).toHaveLength(1);
-  });
-
-  it("per-call maxRetries overrides the client, and 0 disables retries", async () => {
-    const { fetch, requests } = mockFetch(() => json({}, { status: 503 }));
-    const client = new TypeSafeClient({ apiKey: "k", fetch, retry: { maxRetries: 5 } });
-    await expect(settle(client.models.list({ retry: { maxRetries: 0 } }))).rejects.toBeInstanceOf(
-      InternalServerError,
-    );
-    expect(requests).toHaveLength(1);
-  });
-
-  it("tells the server which retry this is", async () => {
-    let calls = 0;
-    const { fetch, requests } = mockFetch(() =>
-      ++calls <= 2 ? json({}, { status: 503 }) : json({ models: MODELS }),
-    );
-    await settle(new TypeSafeClient({ apiKey: "k", fetch }).models.list());
-    const retryHeader = (i: number) =>
-      (requests[i]?.init?.headers as Record<string, string> | undefined)?.[
-        "X-TypeSafe-Retry-Count"
-      ];
-    expect(retryHeader(0)).toBeUndefined();
-    expect(retryHeader(1)).toBe("1");
-    expect(retryHeader(2)).toBe("2");
-  });
-
-  it("rejects invalid maxRetries from config or per call", () => {
-    expect(() => new TypeSafeClient({ apiKey: "k", retry: { maxRetries: -1 } })).toThrow(
-      TypeSafeError,
-    );
-    expect(() => new TypeSafeClient({ apiKey: "k", retry: { maxRetries: 1.5 } })).toThrow(
-      "retry.maxRetries",
-    );
-    const client = new TypeSafeClient({
-      apiKey: "k",
-      fetch: mockFetch(() => json({ models: [] })).fetch,
-    });
-    expect(() => client.models.list({ retry: { maxRetries: -1 } })).toThrow("retry.maxRetries");
-  });
-});
-
-describe("retry policy", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.spyOn(Math, "random").mockReturnValue(0);
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-
-  const always = (status: number) => mockFetch(() => json({}, { status }));
-
-  it("defaults to the SDK policy and exposes the resolved policy on the client", () => {
-    expect(new TypeSafeClient({ apiKey: "k" }).retry).toEqual(DEFAULT_RETRY_POLICY);
-    const client = new TypeSafeClient({ apiKey: "k", retry: { maxRetries: 7, backoffJitter: 0 } });
-    expect(client.retry).toEqual({ ...DEFAULT_RETRY_POLICY, maxRetries: 7, backoffJitter: 0 });
-  });
-
-  it("isolates the policy and status set between default clients", () => {
-    const first = new TypeSafeClient({ apiKey: "k" });
-    const second = new TypeSafeClient({ apiKey: "k" });
-    expect(first.retry).not.toBe(second.retry);
-    expect(first.retry.httpStatuses).not.toBe(second.retry.httpStatuses);
-    // JavaScript callers can mutate these despite TypeScript's readonly annotations.
-    Reflect.set(first.retry, "maxRetries", 0);
-    (first.retry.httpStatuses as Set<number>).clear();
-    for (const client of [second, new TypeSafeClient({ apiKey: "k" })]) {
-      expect(client.retry.maxRetries).toBe(2);
-      expect(client.retry.httpStatuses.has(503)).toBe(true);
-    }
-  });
-
-  it("copies caller-owned status sets when constructing a client", async () => {
-    const statuses = new Set([503]);
-    const { fetch, requests } = always(503);
-    const client = new TypeSafeClient({
-      apiKey: "k",
-      fetch,
-      retry: { httpStatuses: statuses, maxRetries: 1 },
-    });
-    statuses.clear();
-    await expect(settle(client.models.list())).rejects.toBeInstanceOf(InternalServerError);
-    expect(requests).toHaveLength(2);
-  });
-
-  it.each(["client", "call"] as const)(
-    "snapshots the %s policy for an in-flight request",
-    async (source) => {
-      const statuses = new Set([503]);
-      const { fetch, requests } = always(503);
-      const client = new TypeSafeClient({
-        apiKey: "k",
-        fetch,
-        retry: { maxRetries: 1, httpStatuses: new Set([503]) },
-      });
-      const pending = client.models.list(
-        source === "call" ? { retry: { httpStatuses: statuses } } : {},
+  it.effect("retries with exponential delays and an attempt header", () =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp((_, index) =>
+        Effect.sync(() =>
+          jsonResponse(index < 2 ? { error: "busy" } : MODEL_BODY, index < 2 ? 529 : 200),
+        ),
       );
-      Reflect.set(client.retry, "maxRetries", 0);
-      (client.retry.httpStatuses as Set<number>).clear();
-      statuses.clear();
-      await expect(settle(pending)).rejects.toBeInstanceOf(InternalServerError);
-      expect(requests).toHaveLength(2);
-    },
+      const client = yield* makeClient(http, { retry: { backoffJitter: 0 } });
+      const fiber = yield* Effect.forkChild(client.models.list());
+      yield* TestClock.adjust(499);
+      expect(calls).toHaveLength(1);
+      yield* TestClock.adjust(1);
+      expect(calls).toHaveLength(2);
+      yield* TestClock.adjust(999);
+      expect(calls).toHaveLength(2);
+      yield* TestClock.adjust(1);
+      expect(yield* Fiber.join(fiber)).toEqual([MODEL]);
+      expect(calls.map(({ request }) => request.headers["x-typesafe-retry-count"])).toEqual([
+        undefined,
+        "1",
+        "2",
+      ]);
+      expect(calls.every(({ signal }) => signal.aborted)).toBe(true);
+    }),
   );
 
-  it("can extend the default statuses by spreading the client's policy", () => {
-    const client = new TypeSafeClient({ apiKey: "k" });
-    const extended = new TypeSafeClient({
-      apiKey: "k",
-      retry: { httpStatuses: new Set([...client.retry.httpStatuses, 409]) },
-    });
-    expect(extended.retry.httpStatuses.has(409)).toBe(true);
-    expect(extended.retry.httpStatuses.has(503)).toBe(true);
-    expect(client.retry.httpStatuses.has(409)).toBe(false);
-  });
+  it.effect.each([
+    { headers: { "retry-after-ms": "200", "retry-after": "10" }, delay: 200, retry: {} },
+    { headers: { "retry-after": "2" }, delay: 2000, retry: {} },
+    { headers: { "retry-after": "Thu, 01 Jan 1970 00:00:02 GMT" }, delay: 2000, retry: {} },
+    { headers: { "retry-after": "1000" }, delay: 500, retry: {} },
+    { headers: { "retry-after": "5" }, delay: 500, retry: { respectRetryAfter: false } },
+    { headers: { "retry-after": "5" }, delay: 500, retry: { maxRetryAfterMs: 4000 } },
+  ])("honors retry headers and configured limits %#", ({ headers, delay, retry }) =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp((_, index) =>
+        Effect.sync(() =>
+          jsonResponse(index === 0 ? {} : MODEL_BODY, index === 0 ? 429 : 200, headers),
+        ),
+      );
+      const client = yield* makeClient(http, { retry: { backoffJitter: 0, ...retry } });
+      const fiber = yield* Effect.forkChild(client.models.list());
+      yield* TestClock.adjust(delay - 1);
+      expect(calls).toHaveLength(1);
+      yield* TestClock.adjust(1);
+      expect(yield* Fiber.join(fiber)).toEqual([MODEL]);
+    }),
+  );
 
-  it("retries only the statuses in httpStatuses", async () => {
-    const { fetch, requests } = always(409);
-    const client = new TypeSafeClient({
-      apiKey: "k",
-      fetch,
-      retry: { httpStatuses: new Set([409]) },
-    });
-    await expect(settle(client.models.list())).rejects.toBeInstanceOf(APIError);
-    expect(requests).toHaveLength(3);
+  it.effect("stops at maxRetries and returns the last failure", () =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp((_, index) =>
+        Effect.sync(() => jsonResponse({ message: `attempt ${index}` }, 500)),
+      );
+      const client = yield* makeClient(http, { retry: { backoffInitialMs: 0 } });
+      const error = yield* client.models.list().pipe(Effect.flip);
+      expect(error.message).toBe("500 attempt 2");
+      expect(calls).toHaveLength(3);
+      const immediate = yield* client.models.list({ retry: { maxRetries: 0 } }).pipe(Effect.flip);
+      expect(immediate._tag).toBe("InternalServerError");
+      expect(calls).toHaveLength(4);
+    }),
+  );
 
-    const server = always(503);
-    const noServerRetries = new TypeSafeClient({
-      apiKey: "k",
-      fetch: server.fetch,
-      retry: { httpStatuses: new Set([]) },
-    });
-    await expect(settle(noServerRetries.models.list())).rejects.toBeInstanceOf(InternalServerError);
-    expect(server.requests).toHaveLength(1);
-  });
+  it.effect("allows per-call status overrides without mutating client policy", () =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp(() => Effect.sync(() => jsonResponse({}, 400)));
+      const statuses = new Set([429]);
+      const client = yield* makeClient(http, {
+        retry: { httpStatuses: statuses, backoffInitialMs: 0 },
+      });
+      statuses.add(400);
+      yield* client.models.list().pipe(Effect.flip);
+      expect(calls).toHaveLength(1);
+      yield* client.models
+        .list({ retry: { httpStatuses: new Set([400]), maxRetries: 1 } })
+        .pipe(Effect.flip);
+      expect(calls).toHaveLength(3);
+      yield* client.models.list().pipe(Effect.flip);
+      expect(calls).toHaveLength(4);
+    }),
+  );
 
-  it("can stop retrying connection errors while still retrying timeouts", async () => {
-    const dropped = mockFetch(() => {
-      throw new TypeError("fetch failed");
-    });
-    const client = new TypeSafeClient({
-      apiKey: "k",
-      fetch: dropped.fetch,
-      retry: { apiConnectionError: false },
-    });
-    await expect(settle(client.models.list())).rejects.toBeInstanceOf(APIConnectionError);
-    expect(dropped.requests).toHaveLength(1);
+  it.effect.each([true, false])("respects connection retry policy %s", (retry) =>
+    Effect.gen(function* () {
+      const cause = new Error("connection closed");
+      const { http, calls } = mockHttp(({ request }) =>
+        Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request, cause }),
+          }),
+        ),
+      );
+      const error = yield* (yield* makeClient(http, {
+        retry: { apiConnectionError: retry, backoffInitialMs: 0 },
+      })).models
+        .list()
+        .pipe(Effect.flip);
+      expect(error._tag).toBe("APIConnectionError");
+      expect(calls).toHaveLength(retry ? 3 : 1);
+    }),
+  );
 
-    const hung = mockFetch(
-      ({ init }) =>
-        new Promise<Response>((_, reject) => {
-          init?.signal?.addEventListener("abort", () =>
-            reject(new DOMException("aborted", "AbortError")),
-          );
+  it.effect("snapshots the body and expected answers across retries", () =>
+    Effect.gen(function* () {
+      const questions = { ok: noul() };
+      const request = { state: { text: "before" }, questions };
+      const { http, calls } = mockHttp((_, index) =>
+        Effect.sync(() => {
+          request.state.text = "after";
+          return jsonResponse(index === 0 ? {} : ANSWER, index === 0 ? 500 : 200);
         }),
-    );
-    const timeouts = new TypeSafeClient({
-      apiKey: "k",
-      fetch: hung.fetch,
-      timeout: 10,
-      retry: { apiConnectionError: false, maxRetries: 1 },
-    });
-    await expect(settle(timeouts.models.list())).rejects.toBeInstanceOf(APITimeoutError);
-    expect(hung.requests).toHaveLength(2);
-  });
-
-  it("can stop retrying timeouts while still retrying connection errors", async () => {
-    const hung = mockFetch(
-      ({ init }) =>
-        new Promise<Response>((_, reject) => {
-          init?.signal?.addEventListener("abort", () =>
-            reject(new DOMException("aborted", "AbortError")),
-          );
-        }),
-    );
-    const client = new TypeSafeClient({
-      apiKey: "k",
-      fetch: hung.fetch,
-      timeout: 10,
-      retry: { apiTimeoutError: false },
-    });
-    await expect(settle(client.models.list())).rejects.toBeInstanceOf(APITimeoutError);
-    expect(hung.requests).toHaveLength(1);
-
-    const dropped = mockFetch(() => {
-      throw new TypeError("fetch failed");
-    });
-    const connections = new TypeSafeClient({
-      apiKey: "k",
-      fetch: dropped.fetch,
-      retry: { apiTimeoutError: false, maxRetries: 1 },
-    });
-    await expect(settle(connections.models.list())).rejects.toBeInstanceOf(APIConnectionError);
-    expect(dropped.requests).toHaveLength(2);
-  });
-
-  it("backs off from the configured initial delay and cap", async () => {
-    let calls = 0;
-    const { fetch, requests } = mockFetch(() =>
-      ++calls <= 3 ? json({}, { status: 503 }) : json({ models: MODELS }),
-    );
-    const client = new TypeSafeClient({
-      apiKey: "k",
-      fetch,
-      retry: { maxRetries: 3, backoffInitialMs: 100, backoffMaxMs: 150 },
-    });
-    const p = client.models.list();
-    await vi.advanceTimersByTimeAsync(99);
-    expect(requests).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(requests).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(150);
-    expect(requests).toHaveLength(3);
-    await vi.advanceTimersByTimeAsync(150);
-    expect(requests).toHaveLength(4);
-    expect(await settle(p)).toEqual(MODELS);
-  });
-
-  it("can ignore Retry-After, and caps how long a Retry-After may be", async () => {
-    let calls = 0;
-    const { fetch, requests } = mockFetch(() =>
-      ++calls === 1
-        ? json({}, { status: 429, headers: { "retry-after": "2" } })
-        : json({ models: MODELS }),
-    );
-    const client = new TypeSafeClient({ apiKey: "k", fetch, retry: { respectRetryAfter: false } });
-    const p = client.models.list();
-    await vi.advanceTimersByTimeAsync(500);
-    expect(requests).toHaveLength(2);
-    expect(await settle(p)).toEqual(MODELS);
-
-    calls = 0;
-    const capped = new TypeSafeClient({ apiKey: "k", fetch, retry: { maxRetryAfterMs: 1000 } });
-    const q = capped.models.list();
-    await vi.advanceTimersByTimeAsync(500);
-    expect(requests).toHaveLength(4);
-    expect(await settle(q)).toEqual(MODELS);
-  });
-
-  it("per-call retry overrides field by field and leaves the client's policy alone", async () => {
-    const logger = infoLogger();
-    const { fetch, requests } = always(503);
-    const client = new TypeSafeClient({
-      apiKey: "k",
-      fetch,
-      logger,
-      logLevel: "info",
-      retry: { maxRetries: 5, backoffInitialMs: 100 },
-    });
-    await expect(settle(client.models.list({ retry: { maxRetries: 1 } }))).rejects.toBeInstanceOf(
-      InternalServerError,
-    );
-    expect(requests).toHaveLength(2);
-    // backoffInitialMs came from the client, maxRetries from the call.
-    expect(logger.lines).toContain("#1 GET /v1/models retrying in 100ms (retry 1/1) after 503");
-    expect(client.retry.maxRetries).toBe(5);
-  });
-
-  it("validates every numeric field and names it", () => {
-    const bad = (retry: Partial<RetryPolicy>) => () => new TypeSafeClient({ apiKey: "k", retry });
-    expect(bad({ backoffInitialMs: -1 })).toThrow("retry.backoffInitialMs");
-    expect(bad({ backoffMaxMs: Number.NaN })).toThrow("retry.backoffMaxMs");
-    expect(bad({ backoffJitter: 1.5 })).toThrow("retry.backoffJitter");
-    expect(bad({ backoffJitter: -0.1 })).toThrow("retry.backoffJitter");
-    expect(bad({ maxRetryAfterMs: Number.NEGATIVE_INFINITY })).toThrow("retry.maxRetryAfterMs");
-    expect(bad({ httpStatuses: new Set([503, 42]) })).toThrow("retry.httpStatuses");
-    expect(bad({ httpStatuses: new Set([500.5]) })).toThrow("retry.httpStatuses");
-    expect(bad({ backoffInitialMs: 0, backoffMaxMs: 0, backoffJitter: 0 })).not.toThrow();
-    expect(bad({ backoffJitter: 1, maxRetryAfterMs: 0 })).not.toThrow();
-    expect(bad({ maxRetryAfterMs: Number.POSITIVE_INFINITY })).toThrow("retry.maxRetryAfterMs");
-    const client = new TypeSafeClient({
-      apiKey: "k",
-      fetch: mockFetch(() => json({ models: [] })).fetch,
-    });
-    expect(() => client.models.list({ retry: { backoffJitter: 2 } })).toThrow(
-      "retry.backoffJitter",
-    );
-  });
+      );
+      const client = yield* makeClient(http, { retry: { backoffInitialMs: 0 } });
+      yield* client.systemOne(request);
+      expect(requestBody(calls[0])).toMatchObject({ state: { text: "before" } });
+      expect(requestBody(calls[1])).toEqual(requestBody(calls[0]));
+    }),
+  );
 });
 
-describe("timeouts", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.spyOn(Math, "random").mockReturnValue(0);
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+describe("timeouts and interruption", () => {
+  it.effect.each([true, false])("applies per-attempt timeouts and retry policy %s", (retry) =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp(() => Effect.never);
+      const client = yield* makeClient(http, {
+        timeout: 100,
+        retry: { apiTimeoutError: retry, backoffInitialMs: 0 },
+      });
+      const fiber = yield* Effect.forkChild(client.models.list().pipe(Effect.flip));
+      yield* TestClock.adjust(retry ? 299 : 99);
+      expect(calls).toHaveLength(retry ? 3 : 1);
+      yield* TestClock.adjust(1);
+      expect(yield* Fiber.join(fiber)).toMatchObject({ _tag: "APITimeoutError", timeoutMs: 100 });
+      expect(calls.every(({ signal }) => signal.aborted)).toBe(true);
+    }),
+  );
 
-  /** Create a fetch mock that waits for cancellation. */
-  const hangingFetch = () =>
-    mockFetch(
-      ({ init }) =>
-        new Promise<Response>((_, reject) => {
-          init?.signal?.addEventListener("abort", () =>
-            reject(new DOMException("aborted", "AbortError")),
-          );
-        }),
-    );
+  it.effect("uses the per-call timeout", () =>
+    Effect.gen(function* () {
+      const { http } = mockHttp(() => Effect.never);
+      const client = yield* makeClient(http, { timeout: 1000, retry: { maxRetries: 0 } });
+      const fiber = yield* Effect.forkChild(client.models.list({ timeout: 50 }).pipe(Effect.flip));
+      yield* TestClock.adjust(50);
+      expect(yield* Fiber.join(fiber)).toMatchObject({ _tag: "APITimeoutError", timeoutMs: 50 });
+    }),
+  );
 
-  it("throws APITimeoutError, which is an APIConnectionError", async () => {
-    const { fetch } = hangingFetch();
-    const client = new TypeSafeClient({
-      apiKey: "k",
-      fetch,
-      timeout: 1000,
-      retry: { maxRetries: 0 },
-    });
-    const err = await settle(client.models.list().catch((e: unknown) => e));
-    expect(err).toBeInstanceOf(APITimeoutError);
-    expect(err).toBeInstanceOf(APIConnectionError);
-    expect((err as APITimeoutError).timeoutMs).toBe(1000);
-    expect((err as Error).message).toBe("Request timed out after 1000ms.");
-  });
+  it.effect("interrupts an in-flight request and aborts the transport", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const { http, calls } = mockHttp(() =>
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      );
+      const client = yield* makeClient(http);
+      const fiber = yield* Effect.forkChild(client.models.list());
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(fiber);
+      const exit = yield* Fiber.await(fiber);
+      expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true);
+      expect(calls[0]?.signal.aborted).toBe(true);
+      yield* TestClock.adjust(60_000);
+      expect(calls).toHaveLength(1);
+    }),
+  );
 
-  it("fires at exactly the configured timeout", async () => {
-    const { fetch, requests } = hangingFetch();
-    const client = new TypeSafeClient({
-      apiKey: "k",
-      fetch,
-      timeout: 1000,
-      retry: { maxRetries: 0 },
-    });
-    const guarded = client.models.list().catch((e: unknown) => e);
-    await vi.advanceTimersByTimeAsync(999);
-    expect(requests[0]?.init?.signal?.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(requests[0]?.init?.signal?.aborted).toBe(true);
-    expect(await guarded).toBeInstanceOf(APITimeoutError);
-  });
+  it.effect("interrupts retry sleep without starting another request", () =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp(() =>
+        Effect.sync(() => jsonResponse({}, 429, { "retry-after": "30" })),
+      );
+      const client = yield* makeClient(http);
+      const fiber = yield* Effect.forkChild(client.models.list());
+      yield* TestClock.adjust(1);
+      expect(calls).toHaveLength(1);
+      yield* Fiber.interrupt(fiber);
+      yield* TestClock.adjust(60_000);
+      expect(calls).toHaveLength(1);
+    }),
+  );
 
-  it("retries after a timeout, each attempt getting its own timeout", async () => {
-    let calls = 0;
-    const { fetch, requests } = mockFetch(({ init }) => {
-      if (++calls === 1) {
-        return new Promise<Response>((_, reject) => {
-          init?.signal?.addEventListener("abort", () =>
-            reject(new DOMException("aborted", "AbortError")),
-          );
-        });
-      }
-      return json({ models: MODELS });
-    });
-    const client = new TypeSafeClient({ apiKey: "k", fetch, timeout: 1000 });
-    expect(await settle(client.models.list())).toEqual(MODELS);
-    expect(requests).toHaveLength(2);
-  });
-
-  it("per-call timeout overrides the client", async () => {
-    const { fetch, requests } = hangingFetch();
-    const client = new TypeSafeClient({
-      apiKey: "k",
-      fetch,
-      timeout: 60_000,
-      retry: { maxRetries: 0 },
-    });
-    const guarded = client.models.list({ timeout: 50 }).catch((e: unknown) => e);
-    await vi.advanceTimersByTimeAsync(50);
-    expect(requests[0]?.init?.signal?.aborted).toBe(true);
-    expect(await guarded).toBeInstanceOf(APITimeoutError);
-  });
-
-  it("a caller abort during a hung request is reported as an abort, not a timeout", async () => {
-    const ac = new AbortController();
-    const { fetch } = hangingFetch();
-    const client = new TypeSafeClient({ apiKey: "k", fetch, timeout: 60_000 });
-    const guarded = client.models.list({ signal: ac.signal }).catch((e: unknown) => e);
-    await vi.advanceTimersByTimeAsync(10);
-    ac.abort();
-    expect(await guarded).toBeInstanceOf(APIUserAbortError);
-  });
-
-  it("clears its timer after a fast response", async () => {
-    const { fetch } = mockFetch(() => json({ models: MODELS }));
-    const client = new TypeSafeClient({ apiKey: "k", fetch, timeout: 1000 });
-    await client.models.list();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("rejects invalid timeouts from config or per call", () => {
-    expect(() => new TypeSafeClient({ apiKey: "k", timeout: 0 })).toThrow("timeout");
-    expect(() => new TypeSafeClient({ apiKey: "k", timeout: Number.POSITIVE_INFINITY })).toThrow(
-      TypeSafeError,
-    );
-    const client = new TypeSafeClient({
-      apiKey: "k",
-      fetch: mockFetch(() => json({ models: [] })).fetch,
-    });
-    expect(() => client.models.list({ timeout: -5 })).toThrow("timeout");
-  });
-});
-
-describe("RateLimitError", () => {
-  it("exposes the parsed Retry-After in milliseconds", async () => {
-    const { fetch } = mockFetch(() => json({}, { status: 429, headers: { "retry-after": "7" } }));
-    const err = await new TypeSafeClient({ apiKey: "k", fetch, retry: { maxRetries: 0 } }).models
-      .list()
-      .catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(RateLimitError);
-    expect((err as RateLimitError).retryAfterMs).toBe(7000);
-  });
-
-  it("is undefined when the server sent no Retry-After", async () => {
-    const { fetch } = mockFetch(() => json({}, { status: 429 }));
-    const err = await new TypeSafeClient({ apiKey: "k", fetch, retry: { maxRetries: 0 } }).models
-      .list()
-      .catch((e: unknown) => e);
-    expect((err as RateLimitError).retryAfterMs).toBeUndefined();
-  });
-});
-
-describe("browsers", () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  const pretendBrowser = () => {
-    vi.stubGlobal("window", { document: {} });
-    vi.stubGlobal("navigator", { userAgent: "test" });
-  };
-
-  it("refuses to construct in a browser by default", () => {
-    pretendBrowser();
-    expect(() => new TypeSafeClient({ apiKey: "k" })).toThrow(TypeSafeError);
-    expect(() => new TypeSafeClient({ apiKey: "k" })).toThrow("dangerouslyAllowBrowser");
-  });
-
-  it("constructs in a browser when explicitly allowed", () => {
-    pretendBrowser();
-    expect(() => new TypeSafeClient({ apiKey: "k", dangerouslyAllowBrowser: true })).not.toThrow();
-  });
-
-  it("does not mistake Node for a browser", () => {
-    expect(() => new TypeSafeClient({ apiKey: "k" })).not.toThrow();
-  });
-
-  it("calls the global fetch with a receiver it accepts", async () => {
-    // Browser fetch throws "Illegal invocation" unless `this` is the global object (or undefined).
-    const picky = vi.fn(function (this: unknown) {
-      if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
-      return Promise.resolve(json({ models: MODELS }));
-    });
-    vi.stubGlobal("fetch", picky);
-    const client = new TypeSafeClient({ apiKey: "k" });
-    expect(await client.models.list()).toEqual(MODELS);
-    expect(picky).toHaveBeenCalledOnce();
-  });
-
-  it("fails clearly when no fetch exists and none was provided", () => {
-    vi.stubGlobal("fetch", undefined);
-    expect(() => new TypeSafeClient({ apiKey: "k" })).toThrow("No global `fetch`");
-    expect(
-      () => new TypeSafeClient({ apiKey: "k", fetch: mockFetch(() => json({ models: [] })).fetch }),
-    ).not.toThrow();
-  });
+  it.effect.each([
+    { timeout: 0 },
+    { timeout: Number.NaN },
+    { retry: { maxRetries: -1 } },
+    { retry: { backoffJitter: -1 } },
+  ] satisfies RequestOptions[])("fails invalid request options before HTTP %#", (options) =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp();
+      const error = yield* (yield* makeClient(http)).models.list(options).pipe(Effect.flip);
+      expect(error._tag).toBe("InvalidRequestError");
+      expect(calls).toHaveLength(0);
+    }),
+  );
 });

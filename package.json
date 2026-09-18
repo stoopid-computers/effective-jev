@@ -1,7 +1,7 @@
 {
-  "name": "@typesafe-ai/sdk",
-  "version": "0.6.0",
-  "description": "TypeScript SDK for the TypeSafe API",
+  "name": "@compootor/effective-jev",
+  "version": "0.0.1",
+  "description": "Effect v4 SDK for the TypeSafe Jev API",
   "license": "MIT",
   "author": "evinism",
   "type": "module",
@@ -28,7 +28,7 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19.0"
   },
   "packageManager": "npm@11.19.0",
   "scripts": {
@@ -43,23 +43,32 @@
     "test:dist": "vitest run --config vitest.dist.config.ts",
     "check:version": "node scripts/check-version.mjs",
     "check:package": "node scripts/check-package.mjs",
-    "prepublishOnly": "npm run check",
-    "push:npm": "npm publish",
-    "push:npm:dry": "npm publish --dry-run",
-    "push:jsr": "npm run check && jsr publish",
-    "push:jsr:dry": "npm run check && jsr publish --dry-run --allow-dirty",
+    "prepublishOnly": "node scripts/release.mjs check --publish",
     "demo": "tsx examples/demo.ts",
-    "check": "npm run lint && npm run typecheck && npm run check:version && npm run test:coverage && npm run build && npm run test:dist && npm run check:package",
-    "docs": "npm ci --prefix docs --ignore-scripts --no-audit --no-fund && npm run --prefix docs build"
+    "check": "npm run lint && npm run typecheck && npm run check:version && npm run test:release && npm run test:coverage && npm run build && npm run test:dist && npm run check:package",
+    "docs": "npm ci --prefix docs --ignore-scripts --no-audit --no-fund && npm run --prefix docs build",
+    "prepack": "npm run build",
+    "test:release": "node --test test/release/*.test.mjs",
+    "check:jsr": "jsr publish --dry-run --allow-dirty --allow-slow-types && node --test test/release/jsr-package.integration.mjs",
+    "release:prepare": "node scripts/release.mjs prepare",
+    "release:check": "node scripts/release.mjs check",
+    "release:pack": "npm run check && npm run check:jsr && node scripts/release.mjs pack && node scripts/test-tarball.mjs",
+    "release:publish:npm": "node scripts/publish-npm.mjs",
+    "release:publish:jsr": "node scripts/publish-jsr.mjs",
+    "release:verify": "node scripts/publish-npm.mjs --verify"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
+    "@babel/parser": "7.29.8",
     "@biomejs/biome": "^2.5.11",
+    "@effect/vitest": "4.0.0-rc.112",
     "@types/node": "^26.4.1",
     "@vitest/coverage-v8": "^4.1.11",
+    "effect": "4.0.0-rc.112",
     "git-cliff": "2.13.1",
     "jsr": "^0.14.3",
     "publint": "^0.3.24",
+    "semver": "7.8.5",
     "tsdown": "^0.22.14",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
@@ -70,10 +79,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/typesafe-ai/typesafe-sdk-js.git"
+    "url": "git+https://github.com/stoopid-computers/effective-jev.git"
   },
-  "homepage": "https://docs.typesafe.ai/sdk/javascript",
+  "homepage": "https://github.com/stoopid-computers/effective-jev#readme",
   "bugs": {
-    "url": "https://github.com/typesafe-ai/typesafe-sdk-js/issues"
+    "url": "https://github.com/stoopid-computers/effective-jev/issues"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-rc.112"
   }
 }

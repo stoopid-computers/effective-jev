@@ -1,14 +1,11 @@
-/** A JSON-compatible value. */
-export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+import type { Redacted, Schema } from "effect";
+import type { HttpClientResponse } from "effect/unstable/http";
+
+/** A JSON-compatible value, including readonly objects and arrays. */
+export type JsonValue = Schema.Json;
 
 /** Text, a JSON object or array, or `null` for state, instructions, and criteria. */
-export type EntryType = string | { [key: string]: JsonValue } | JsonValue[] | null;
+export type EntryType = string | Schema.JsonObject | Schema.JsonArray | null;
 
 // ---------------------------------------------------------------------------
 // Questions
@@ -195,8 +192,6 @@ export interface RetryPolicy {
 
 /** Per-call options that override client settings. */
 export interface RequestOptions {
-  /** Cancellation signal for the request and pending retries. */
-  signal?: AbortSignal;
   /** Timeout per attempt in milliseconds; there is no total retry budget. */
   timeout?: number;
   /** Retry overrides for this call; omitted fields inherit client settings. */
@@ -205,36 +200,21 @@ export interface RequestOptions {
   headers?: Record<string, string>;
 }
 
-/** HTTP fetch implementation compatible with the global `fetch`. */
-export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
-
-/** Log verbosity; `off` disables logging. */
-export type LogLevel = "debug" | "info" | "warn" | "error" | "off";
-
-/** Log methods accepting a message and structured values; compatible with `console`. */
-export interface Logger {
-  debug(message: string, ...args: unknown[]): void;
-  info(message: string, ...args: unknown[]): void;
-  warn(message: string, ...args: unknown[]): void;
-  error(message: string, ...args: unknown[]): void;
+/** Decoded data and the Effect HTTP response. Its body remains available as an Effect. */
+export interface WithResponse<A> {
+  readonly data: A;
+  readonly response: HttpClientResponse.HttpClientResponse;
+  readonly requestId: string | undefined;
 }
 
 /** Client options. Explicit values take precedence over environment variables, then SDK defaults. */
 export interface TypeSafeClientConfig {
   /** Required API key; falls back to `TYPESAFE_API_KEY`. */
-  apiKey?: string;
+  apiKey?: string | Redacted.Redacted<string>;
   /** API root; falls back to `TYPESAFE_BASE_URL`, then `https://api.typesafe.ai`. */
   baseURL?: string;
   /** Default model; falls back to `TYPESAFE_DEFAULT_MODEL`, then `jev-latest`. */
   defaultModel?: string;
-  /**
-   * Log level; falls back to `TYPESAFE_LOG_LEVEL`, then `warn`.
-   * `info` logs request summaries; `debug` adds headers and bodies.
-   * Known credential headers are redacted; bodies are not.
-   */
-  logLevel?: LogLevel;
-  /** Logger filtered to `logLevel` and above. Default: prefixed `console`. */
-  logger?: Logger;
   /** Retry overrides; omitted fields use the defaults in `RetryPolicy`. */
   retry?: Partial<RetryPolicy>;
   /** Timeout per attempt in milliseconds, without a total retry budget. Default: 10000. */
@@ -243,6 +223,4 @@ export interface TypeSafeClientConfig {
   defaultHeaders?: Record<string, string>;
   /** Allow browser use, exposing the API key to page users. Default: false. */
   dangerouslyAllowBrowser?: boolean;
-  /** Custom HTTP fetch implementation for transport configuration or tests. Default: global `fetch`. */
-  fetch?: Fetch;
 }

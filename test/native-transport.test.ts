@@ -1,172 +1,133 @@
-import { createServer, type RequestListener } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
+import { Effect, Layer } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
-import { APITimeoutError, APIUserAbortError, noul, TypeSafeClient } from "../src";
+import { noul, TypeSafeClient, type TypeSafeClientConfig } from "../src";
+import { ANSWER, MODEL, MODEL_BODY } from "./helpers";
 
-/** Real fetch/socket coverage: mocks do not reproduce the headers/body lifecycle. */
 const withServer = async (
-  handle: RequestListener,
+  handler: (response: ServerResponse, index: number) => void,
   run: (baseURL: string) => Promise<void>,
 ): Promise<void> => {
-  const server = createServer(handle);
+  let count = 0;
+  const server = createServer((_request, response) => handler(response, count++));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (typeof address !== "object" || address === null) throw new Error("Missing server address");
   try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("No server address");
     await run(`http://127.0.0.1:${address.port}`);
   } finally {
     server.closeAllConnections();
-    if (server.listening) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
   }
 };
 
-describe("native response transport", () => {
-  it("sends one authorization, content type and overriding custom header on the wire", async () => {
-    let observed: unknown;
+const make = (baseURL: string, config: TypeSafeClientConfig = {}) =>
+  TypeSafeClient.make({ apiKey: "native-test", baseURL, ...config }).pipe(
+    Effect.provide(FetchHttpClient.layer),
+  );
+
+describe("FetchHttpClient over real HTTP", () => {
+  it("drains delayed body chunks and keeps raw metadata readable", async () => {
     await withServer(
-      (req, res) => {
-        observed = req.headers;
-        res.end("{}");
+      (response) => {
+        response.writeHead(200, {
+          "content-type": "application/json",
+          "x-typesafe-request-id": "req_native",
+        });
+        const text = JSON.stringify(MODEL_BODY);
+        response.write(text.slice(0, 10));
+        setTimeout(() => response.end(text.slice(10)), 20);
       },
       async (baseURL) => {
-        await new TypeSafeClient({
-          apiKey: "test",
-          baseURL,
-          defaultHeaders: { authorization: "bad", "X-Team": "default", "content-type": "bad" },
-        }).systemOne(
-          { state: "s", questions: { q: noul("?") } },
-          { headers: { "x-team": "call" } },
-        );
+        const client = await Effect.runPromise(make(baseURL));
+        const result = await Effect.runPromise(client.models.listWithResponse());
+        expect(result.data).toEqual([MODEL]);
+        expect(result.requestId).toBe("req_native");
+        expect(await Effect.runPromise(result.response.json)).toEqual(MODEL_BODY);
       },
     );
-    expect(observed).toMatchObject({
-      authorization: "Bearer test",
-      "x-team": "call",
-      "content-type": "application/json",
-    });
   });
 
-  it.each([200, 503])(
-    "times out a stalled %s body on parsed, withResponse and raw paths",
-    async (status) => {
-      let headersReceived = 0;
-      await withServer(
-        (_req, res) => {
-          res.writeHead(status, { "content-type": "application/json" });
-          res.flushHeaders();
-        },
-        async (baseURL) => {
-          const client = new TypeSafeClient({
-            apiKey: "k",
-            baseURL,
-            timeout: 200,
-            retry: { maxRetries: 0 },
-            fetch: async (url, init) => {
-              const response = await fetch(url, init);
-              headersReceived++;
-              return response;
-            },
-          });
-          await expect(client.models.list()).rejects.toBeInstanceOf(APITimeoutError);
-          await expect(client.models.list().withResponse()).rejects.toBeInstanceOf(APITimeoutError);
-          await expect(client.models.list().asResponse()).rejects.toBeInstanceOf(APITimeoutError);
-          expect(headersReceived).toBe(3);
-        },
-      );
-    },
-  );
-
-  it.each([200, 503])(
-    "honors caller cancellation after %s headers and never retries",
-    async (status) => {
-      let attempts = 0;
-      await withServer(
-        (_req, res) => {
-          attempts++;
-          res.writeHead(status, { "content-type": "application/json" });
-          res.flushHeaders();
-        },
-        async (baseURL) => {
-          const ac = new AbortController();
-          const client = new TypeSafeClient({
-            apiKey: "k",
-            baseURL,
-            fetch: async (url, init) => {
-              const response = await fetch(url, init);
-              setTimeout(() => ac.abort(), 10);
-              return response;
-            },
-          });
-          await expect(client.models.list({ signal: ac.signal })).rejects.toBeInstanceOf(
-            APIUserAbortError,
-          );
-          expect(attempts).toBe(1);
-        },
-      );
-    },
-  );
-
-  it.each([200, 503])(
-    "retries a broken %s body and exposes the successful response metadata",
-    async (status) => {
-      let attempts = 0;
-      await withServer(
-        (_req, res) => {
-          attempts++;
-          res.writeHead(attempts === 1 ? status : 200, {
-            "content-type": "application/json",
-            "x-typesafe-request-id": `req_${attempts}`,
-          });
-          if (attempts === 1) {
-            res.write("[");
-            setTimeout(() => res.destroy(), 10);
-          } else res.end('{"models":[]}');
-        },
-        async (baseURL) => {
-          const client = new TypeSafeClient({
-            apiKey: "k",
-            baseURL,
-            retry: { maxRetries: 1, backoffInitialMs: 0 },
-          });
-          const { data, response, requestId } = await client.models.list().withResponse();
-          expect(data).toEqual([]);
-          expect(attempts).toBe(2);
-          expect(requestId).toBe("req_2");
-          expect(response.url).toBe(`${baseURL}/v1/models`);
-          expect(response.bodyUsed).toBe(true);
-        },
-      );
-    },
-  );
-
-  it("buffers delayed chunks before raw handoff and preserves a readable body after cancellation", async () => {
-    let completed = false;
+  it("times out a stalled response body and retries the whole request", async () => {
+    let attempts = 0;
     await withServer(
-      (_req, res) => {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.write("[");
-        setTimeout(() => {
-          completed = true;
-          res.end("]");
-        }, 20);
+      (response, index) => {
+        attempts++;
+        response.writeHead(200, { "content-type": "application/json" });
+        if (index === 0) response.write('{"models":');
+        else response.end(JSON.stringify(MODEL_BODY));
       },
       async (baseURL) => {
-        const ac = new AbortController();
-        const response = await new TypeSafeClient({ apiKey: "k", baseURL }).models
-          .list({ signal: ac.signal })
-          .asResponse();
-        expect(completed).toBe(true);
-        expect(response.bodyUsed).toBe(false);
-        expect(response.url).toBe(`${baseURL}/v1/models`);
-        ac.abort();
-        expect(await response.json()).toEqual([]);
+        const client = await Effect.runPromise(
+          make(baseURL, { timeout: 100, retry: { maxRetries: 1, backoffInitialMs: 0 } }),
+        );
+        expect(await Effect.runPromise(client.models.list())).toEqual([MODEL]);
+        expect(attempts).toBe(2);
       },
     );
+  });
+
+  it("retries a response body connection failure", async () => {
+    let attempts = 0;
+    await withServer(
+      (response, index) => {
+        attempts++;
+        if (index === 0) {
+          response.writeHead(200, { "content-type": "application/json", "content-length": "999" });
+          response.write('{"models":');
+          setTimeout(() => response.destroy(), 10);
+        } else response.end(JSON.stringify(MODEL_BODY));
+      },
+      async (baseURL) => {
+        const client = await Effect.runPromise(
+          make(baseURL, { retry: { maxRetries: 1, backoffInitialMs: 0 } }),
+        );
+        expect(await Effect.runPromise(client.models.list())).toEqual([MODEL]);
+        expect(attempts).toBe(2);
+      },
+    );
+  });
+
+  it("supports AbortSignal at the Effect runner boundary", async () => {
+    let received: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      received = resolve;
+    });
+    await withServer(
+      (response) => {
+        response.writeHead(200);
+        response.write("{");
+        received?.();
+      },
+      async (baseURL) => {
+        const client = await Effect.runPromise(make(baseURL));
+        const controller = new AbortController();
+        const running = Effect.runPromiseExit(client.models.list(), { signal: controller.signal });
+        await started;
+        controller.abort();
+        const exit = await running;
+        expect(exit._tag).toBe("Failure");
+      },
+    );
+  });
+
+  it("supports fetch injection through the native Fetch reference and layerFetch", async () => {
+    const calls: RequestInit[] = [];
+    const fetch: typeof globalThis.fetch = async (_input, init) => {
+      if (init) calls.push(init);
+      return new Response(JSON.stringify(ANSWER));
+    };
+    const layer = TypeSafeClient.layerFetch({ apiKey: "secret" }).pipe(
+      Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch)),
+    );
+    const program = Effect.gen(function* () {
+      const client = yield* TypeSafeClient;
+      return yield* client.systemOne({ state: "hello", questions: { ok: noul() } });
+    });
+    expect(await Effect.runPromise(program.pipe(Effect.provide(layer)))).toEqual(ANSWER);
+    expect(calls).toHaveLength(1);
   });
 });

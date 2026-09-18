@@ -1,33 +1,11 @@
 import { readFileSync } from "node:fs";
+import { Effect, Layer } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
 
-export const pkg: { name: string; version: string; exports: Record<string, unknown> } = JSON.parse(
+export const pkg: { name: string; version: string } = JSON.parse(
   readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
 );
-
-export interface RecordedCall {
-  url: string;
-  init: RequestInit | undefined;
-}
-
-/** Create a fetch mock that records calls and returns fixed JSON. */
-export const cannedFetch = (
-  body: unknown,
-): { fetch: (url: string, init?: RequestInit) => Promise<Response>; calls: RecordedCall[] } => {
-  const calls: RecordedCall[] = [];
-  const fetch = async (url: string, init?: RequestInit): Promise<Response> => {
-    calls.push({ url, init });
-    return new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "content-type": "application/json", "x-typesafe-request-id": "req_dist" },
-    });
-  };
-  return { fetch, calls };
-};
-
-/** Fixed API root independent of `TYPESAFE_BASE_URL`. */
-export const BASE_URL = "https://dist.test";
-
-export const SYSTEM_ONE_BODY: Record<string, unknown> = {
+export const BODY = {
   model: "jev-latest",
   answers: {
     ok: { type: "noul", noul: 0.9 },
@@ -41,26 +19,22 @@ export const SYSTEM_ONE_BODY: Record<string, unknown> = {
   usage: { input_tokens: 10, output_tokens: 2 },
 };
 
-/** Expected runtime exports; keep aligned with `src/index.ts`. */
-export const EXPECTED_VALUE_EXPORTS: string[] = [
-  "APIConnectionError",
-  "APIError",
-  "APIPromise",
-  "APITimeoutError",
-  "APIUserAbortError",
-  "AuthenticationError",
-  "BadRequestError",
-  "ENV",
-  "InternalServerError",
-  "LOG_LEVELS",
-  "NotFoundError",
-  "PermissionDeniedError",
-  "RateLimitError",
-  "TypeSafeClient",
-  "TypeSafeError",
-  "UnprocessableEntityError",
-  "VERSION",
-  "choice",
-  "noul",
-  "score",
-].sort();
+/** Exercise built exports against an injected fetch transport. */
+export const roundTrip = async (sdk: typeof import("../../dist/index.mjs")): Promise<void> => {
+  const fetch: typeof globalThis.fetch = async () =>
+    new Response(JSON.stringify(BODY), { headers: { "x-typesafe-request-id": "req_dist" } });
+  const layer = sdk.TypeSafeClient.layerFetch({ apiKey: "test" }).pipe(
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch)),
+  );
+  const program = sdk.TypeSafeClient.use((client) =>
+    client.systemOneWithResponse({
+      state: null,
+      questions: { ok: sdk.noul(), tone: sdk.choice(null, { warm: null, cold: null }) },
+    }),
+  );
+  const result = await Effect.runPromise(program.pipe(Effect.provide(layer)));
+  if (result.data.answers.tone.choice !== "warm" || result.requestId !== "req_dist")
+    throw new Error("Built package request failed");
+  if (JSON.stringify(await Effect.runPromise(result.response.json)) !== JSON.stringify(BODY))
+    throw new Error("Built package lost response metadata");
+};

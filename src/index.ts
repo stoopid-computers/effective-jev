@@ -1,22 +1,25 @@
-export { APIPromise, type WithResponse } from "./api-promise";
-export { TypeSafeClient } from "./client";
-export { ENV, type EnvVar } from "./env";
+export { TypeSafeClient, type TypeSafeClientService } from "./client.ts";
+export { DEFAULT_BASE_URL, DEFAULT_MODEL, ENV, type EnvVar } from "./env.ts";
 export {
   APIConnectionError,
   APIError,
+  type APIResponseError,
   APITimeoutError,
-  APIUserAbortError,
   AuthenticationError,
   BadRequestError,
   InternalServerError,
+  InvalidRequestError,
   NotFoundError,
   PermissionDeniedError,
   RateLimitError,
-  TypeSafeError,
+  ResponseValidationError,
+  TypeSafeConfigError,
+  type TypeSafeError,
   UnprocessableEntityError,
-} from "./errors";
-export { LOG_LEVELS } from "./logging";
-export { choice, noul, score } from "./questions";
-export type { Models } from "./resources/models";
-export type * from "./types";
-export { VERSION } from "./version";
+} from "./errors.ts";
+export { choice, noul, score } from "./questions.ts";
+export type { Models } from "./resources/models.ts";
+export { DEFAULT_RETRY_POLICY, DEFAULT_TIMEOUT_MS } from "./retry.ts";
+export * as Schemas from "./schemas.ts";
+export type * from "./types.ts";
+export { VERSION } from "./version.ts";

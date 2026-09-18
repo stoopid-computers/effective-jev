@@ -1,427 +1,305 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import { ConfigProvider, Effect, Layer, Redacted } from "effect";
+import { HttpClient } from "effect/unstable/http";
+import { afterEach, vi } from "vitest";
 import {
-  APIConnectionError,
-  APIUserAbortError,
   choice,
-  ENV,
   noul,
-  type Questions,
+  type SystemOneRequest,
   score,
   TypeSafeClient,
   type TypeSafeClientConfig,
-  TypeSafeError,
-  VERSION,
 } from "../src";
-import { DEFAULT_BASE_URL, DEFAULT_MODEL } from "../src/client";
-import { DEFAULT_LOG_LEVEL, LOG_LEVELS } from "../src/logging";
-import { DEFAULT_RETRY_POLICY, DEFAULT_TIMEOUT_MS } from "../src/retry";
-import { describeRuntime } from "../src/runtime";
-import { json, mockFetch } from "./helpers";
+import {
+  ANSWER,
+  jsonResponse,
+  MODEL,
+  MODEL_BODY,
+  makeClient,
+  mockHttp,
+  requestBody,
+} from "./helpers";
 
-/** Read the API key from an outgoing request. */
-const sentApiKey = async (config: TypeSafeClientConfig = {}): Promise<string | undefined> => {
-  const { fetch, requests } = mockFetch(() => json({ models: [] }));
-  await new TypeSafeClient({ ...config, fetch }).models.list();
-  const headers = requests[0]?.init?.headers as Record<string, string> | undefined;
-  return headers?.Authorization?.replace(/^Bearer /, "");
-};
+const configProvider = (values: Record<string, string | undefined>) =>
+  Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(values));
 
-const SYSTEM_ONE_RESPONSE = {
-  model: "m",
-  answers: { q1: { type: "noul", noul: 0.5 } },
-  usage: { input_tokens: 1, output_tokens: 1 },
-};
+describe("configuration and layers", () => {
+  afterEach(() => vi.unstubAllGlobals());
 
-describe("TypeSafeClient configuration", () => {
-  const savedEnv = { ...process.env };
-  beforeEach(() => {
-    for (const name of Object.values(ENV)) delete process.env[name];
-  });
-  afterEach(() => {
-    process.env = { ...savedEnv };
-  });
+  it.effect("loads credentials and settings through ConfigProvider", () =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp();
+      const client = yield* TypeSafeClient.make().pipe(
+        Effect.provideService(HttpClient.HttpClient, http),
+        configProvider({
+          TYPESAFE_API_KEY: " provider-secret \n",
+          TYPESAFE_BASE_URL: "https://custom.test///",
+          TYPESAFE_DEFAULT_MODEL: "jev-pinned",
+        }),
+      );
+      expect(client.baseURL).toBe("https://custom.test");
+      expect(client.defaultModel).toBe("jev-pinned");
+      yield* client.models.list();
+      expect(calls[0]?.request.headers.authorization).toBe("Bearer provider-secret");
+      expect(JSON.stringify(client)).not.toContain("provider-secret");
+    }),
+  );
 
-  it("falls back to defaults when neither config nor env is set", () => {
-    const client = new TypeSafeClient({ apiKey: "k" });
-    expect(client.baseURL).toBe(DEFAULT_BASE_URL);
-    expect(client.defaultModel).toBe(DEFAULT_MODEL);
-    expect(client.logLevel).toBe(DEFAULT_LOG_LEVEL);
-    expect(client.retry).toEqual(DEFAULT_RETRY_POLICY);
-    expect(client.timeout).toBe(DEFAULT_TIMEOUT_MS);
-  });
+  it.effect("uses defaults for missing and blank optional environment settings", () =>
+    Effect.gen(function* () {
+      const { http } = mockHttp();
+      for (const env of [{}, { TYPESAFE_BASE_URL: " ", TYPESAFE_DEFAULT_MODEL: " " }]) {
+        const client = yield* TypeSafeClient.make({ apiKey: "key" }).pipe(
+          Effect.provideService(HttpClient.HttpClient, http),
+          configProvider(env),
+        );
+        expect(client.baseURL).toBe("https://api.typesafe.ai");
+        expect(client.defaultModel).toBe("jev-latest");
+      }
+    }),
+  );
 
-  it("reads every setting from the environment", async () => {
-    process.env[ENV.apiKey] = "env-key";
-    process.env[ENV.baseURL] = "https://env.test";
-    process.env[ENV.defaultModel] = "env-model";
-    process.env[ENV.logLevel] = "debug";
-    const client = new TypeSafeClient();
-    await expect(sentApiKey()).resolves.toBe("env-key");
-    expect(client.baseURL).toBe("https://env.test");
-    expect(client.defaultModel).toBe("env-model");
-    expect(client.logLevel).toBe("debug");
-  });
+  it.effect("gives explicit settings precedence and accepts Redacted credentials", () =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp();
+      const client = yield* makeClient(http, {
+        apiKey: Redacted.make("explicit"),
+        defaultModel: "jev-fixed",
+      }).pipe(configProvider({ TYPESAFE_API_KEY: "env", TYPESAFE_DEFAULT_MODEL: "env" }));
+      yield* client.models.list();
+      expect(client.defaultModel).toBe("jev-fixed");
+      expect(calls[0]?.request.headers.authorization).toBe("Bearer explicit");
+    }),
+  );
 
-  it("prefers config over the environment", async () => {
-    process.env[ENV.apiKey] = "env-key";
-    process.env[ENV.baseURL] = "https://env.test";
-    process.env[ENV.defaultModel] = "env-model";
-    process.env[ENV.logLevel] = "debug";
-    const client = new TypeSafeClient({
-      apiKey: "code-key",
-      baseURL: "https://code.test",
-      defaultModel: "code-model",
-      logLevel: "error",
-    });
-    await expect(sentApiKey({ apiKey: "code-key" })).resolves.toBe("code-key");
-    expect(client.baseURL).toBe("https://code.test");
-    expect(client.defaultModel).toBe("code-model");
-    expect(client.logLevel).toBe("error");
-  });
+  it.effect("reports a missing credential as a typed configuration failure", () =>
+    Effect.gen(function* () {
+      const { http } = mockHttp();
+      const error = yield* TypeSafeClient.make().pipe(
+        Effect.provideService(HttpClient.HttpClient, http),
+        configProvider({}),
+        Effect.flip,
+      );
+      expect(error._tag).toBe("TypeSafeConfigError");
+      expect(error.message).toContain("TYPESAFE_API_KEY");
+    }),
+  );
 
-  it("keeps the API key off the instance so logging the client cannot leak it", () => {
-    const client = new TypeSafeClient({ apiKey: "super-secret" });
-    expect("apiKey" in client).toBe(false);
-    expect(Object.values(client)).not.toContain("super-secret");
-    expect(JSON.stringify(client)).not.toContain("super-secret");
-  });
+  it.effect.each([
+    { apiKey: " " },
+    { baseURL: "not a URL" },
+    { baseURL: "file:///tmp" },
+    { baseURL: "https://user:pass@test" },
+    { baseURL: "https://test?q=1" },
+    { baseURL: "https://test#fragment" },
+    { defaultModel: "" },
+    { timeout: 0 },
+    { timeout: -1 },
+    { timeout: Number.NaN },
+    { timeout: Number.POSITIVE_INFINITY },
+    { retry: { maxRetries: -1 } },
+    { retry: { maxRetries: 1.5 } },
+    { retry: { backoffInitialMs: -1 } },
+    { retry: { backoffMaxMs: Number.NaN } },
+    { retry: { backoffJitter: 2 } },
+    { retry: { maxRetryAfterMs: -1 } },
+    { retry: { httpStatuses: new Set([99]) } },
+  ] satisfies TypeSafeClientConfig[])("rejects invalid configuration %#", (options) =>
+    Effect.gen(function* () {
+      const error = yield* makeClient(mockHttp().http, options).pipe(Effect.flip);
+      expect(error._tag).toBe("TypeSafeConfigError");
+    }),
+  );
 
-  it("treats empty and whitespace-only env values as unset", () => {
-    process.env[ENV.apiKey] = "k";
-    process.env[ENV.baseURL] = "   ";
-    process.env[ENV.defaultModel] = "";
-    process.env[ENV.logLevel] = "";
-    const client = new TypeSafeClient();
-    expect(client.baseURL).toBe(DEFAULT_BASE_URL);
-    expect(client.defaultModel).toBe(DEFAULT_MODEL);
-    expect(client.logLevel).toBe(DEFAULT_LOG_LEVEL);
-  });
+  it.effect("guards browser use unless explicitly enabled", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal("window", { document: {} });
+      vi.stubGlobal("navigator", {});
+      const error = yield* makeClient(mockHttp().http).pipe(Effect.flip);
+      expect(error.message).toContain("browser");
+      const client = yield* makeClient(mockHttp().http, { dangerouslyAllowBrowser: true });
+      expect(yield* client.models.list()).toEqual([MODEL]);
+    }),
+  );
 
-  it("throws a TypeSafeError naming the env var when no API key is available", () => {
-    expect(() => new TypeSafeClient()).toThrow(TypeSafeError);
-    expect(() => new TypeSafeClient()).toThrow(ENV.apiKey);
-  });
-
-  it("strips trailing slashes from baseURL from either source", () => {
-    process.env[ENV.baseURL] = "https://example.test///";
-    expect(new TypeSafeClient({ apiKey: "k" }).baseURL).toBe("https://example.test");
-    expect(new TypeSafeClient({ apiKey: "k", baseURL: "https://x.test/" }).baseURL).toBe(
-      "https://x.test",
-    );
-  });
-
-  it.each(LOG_LEVELS)("accepts log level %s", (level) => {
-    expect(new TypeSafeClient({ apiKey: "k", logLevel: level }).logLevel).toBe(level);
-    process.env[ENV.logLevel] = level;
-    expect(new TypeSafeClient({ apiKey: "k" }).logLevel).toBe(level);
-  });
-
-  it("rejects an invalid log level and names where it came from", () => {
-    process.env[ENV.logLevel] = "loud";
-    expect(() => new TypeSafeClient({ apiKey: "k" })).toThrow(TypeSafeError);
-    expect(() => new TypeSafeClient({ apiKey: "k" })).toThrow(`"loud" from ${ENV.logLevel}`);
-    expect(() => new TypeSafeClient({ apiKey: "k" })).toThrow(LOG_LEVELS.join(", "));
-    // biome-ignore lint/suspicious/noExplicitAny: deliberately bypassing the type to mimic a JS caller
-    expect(() => new TypeSafeClient({ apiKey: "k", logLevel: "loud" as any })).toThrow(
-      "the `logLevel` option",
-    );
-  });
+  it.effect("provides an injectable service through Layer", () =>
+    Effect.gen(function* () {
+      const { http } = mockHttp();
+      const program = Effect.gen(function* () {
+        return yield* (yield* TypeSafeClient).models.list();
+      });
+      const layer = TypeSafeClient.layer({ apiKey: "key" }).pipe(
+        Layer.provide(Layer.succeed(HttpClient.HttpClient, http)),
+      );
+      expect(yield* program.pipe(Effect.provide(layer))).toEqual([MODEL]);
+    }),
+  );
 });
 
 describe("requests", () => {
-  it("sends auth and identifying headers", async () => {
-    const { fetch, requests } = mockFetch(() => json({ models: [] }));
-    const client = new TypeSafeClient({ apiKey: "secret", baseURL: "https://x.test", fetch });
-    await client.models.list();
-
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.url).toBe("https://x.test/v1/models");
-    expect(requests[0]?.init?.method).toBe("GET");
-    const headers = requests[0]?.init?.headers as Record<string, string>;
-    expect(headers.Authorization).toBe("Bearer secret");
-    expect(headers["User-Agent"]).toBe(`typesafe-sdk/${VERSION}`);
-    expect(headers["X-TypeSafe-SDK"]).toBe(`typesafe-sdk/${VERSION}`);
-    expect(headers["X-TypeSafe-Runtime"]).toBe(describeRuntime());
-    expect(headers["X-TypeSafe-Runtime"]).toMatch(/^node\/\d+\.\d+\.\d+ \(\w+; \w+\)$/);
-    expect(headers["Content-Type"]).toBeUndefined();
-  });
-
-  it("merges defaultHeaders and per-call headers, per-call winning, never clobbering auth", async () => {
-    const { fetch, requests } = mockFetch(() => json({ models: [] }));
-    const client = new TypeSafeClient({
-      apiKey: "secret",
-      fetch,
-      defaultHeaders: { "X-Trace": "client", "X-Only-Default": "yes", Authorization: "nope" },
-    });
-    await client.models.list({ headers: { "X-Trace": "call", "X-Only-Call": "yes" } });
-    const headers = requests[0]?.init?.headers as Record<string, string>;
-    expect(headers["X-Trace"]).toBe("call");
-    expect(headers["X-Only-Default"]).toBe("yes");
-    expect(headers["X-Only-Call"]).toBe("yes");
-    expect(headers.Authorization).toBe("Bearer secret");
-  });
-
-  it.each([{ cards: [] }, { cards: [{ name: "m", description: "d", release_date: "2026" }] }])(
-    "models.list() unwraps the documented response: %j",
-    async ({ cards }) => {
-      const { fetch } = mockFetch(() => json({ models: cards }));
-      const client = new TypeSafeClient({ apiKey: "k", fetch });
-      expect(await client.models.list()).toEqual(cards);
-      const { data, response } = await client.models.list().withResponse();
-      expect(data).toEqual(cards);
-      expect(response.status).toBe(200);
-    },
+  it.effect("is lazy and sends a new request each time an Effect runs", () =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp();
+      const client = yield* makeClient(http);
+      const operation = client.models.list();
+      expect(calls).toHaveLength(0);
+      expect(yield* operation).toEqual([MODEL]);
+      expect(yield* operation).toEqual([MODEL]);
+      expect(calls).toHaveLength(2);
+    }),
   );
 
-  it.each(
-    [null, [], { models: { models: [] } }, { models: null }, { models: "bad" }, { ok: true }].map(
-      (wire) => ({ wire }),
-    ),
-  )("models.list() fails clearly on an unrecognized shape: %j", async ({ wire }) => {
-    const { fetch } = mockFetch(() => json(wire));
-    await expect(new TypeSafeClient({ apiKey: "k", fetch }).models.list()).rejects.toThrow(
-      "Unexpected response shape from GET /v1/models",
-    );
-  });
-
-  it("preserves employee-only model fields through raw access", async () => {
-    const wire = {
-      models: [{ name: "m", description: "d", release_date: "2026", tags: ["internal"] }],
-    };
-    const { fetch } = mockFetch(() => json(wire));
-    const raw = await new TypeSafeClient({ apiKey: "k", fetch }).models.list().asResponse();
-    expect(raw.bodyUsed).toBe(false);
-    expect(await raw.json()).toEqual(wire);
-  });
-
-  it("posts the systemOne payload with the default model", async () => {
-    const { fetch, requests } = mockFetch(() => json(SYSTEM_ONE_RESPONSE));
-    const client = new TypeSafeClient({ apiKey: "k", baseURL: "https://x.test", fetch });
-    const result = await client.systemOne({ state: { a: 1 }, questions: { q1: noul("x") } });
-
-    expect(requests[0]?.url).toBe("https://x.test/v1/systemone");
-    expect(requests[0]?.init?.method).toBe("POST");
-    expect(requests[0]?.body).toEqual({
-      state: { a: 1 },
-      model: DEFAULT_MODEL,
-      questions: { q1: { type: "noul", instructions: "x", criteria: undefined } },
-    });
-    expect(result.answers.q1.noul).toBe(0.5);
-  });
-
-  it("sends the request object as the payload, filling in the default model", async () => {
-    const { fetch, requests } = mockFetch(() => json(SYSTEM_ONE_RESPONSE));
-    const client = new TypeSafeClient({ apiKey: "k", fetch });
-    const request = { state: { a: 1 }, questions: { q1: noul("x") } };
-    await client.systemOne(request);
-    expect(requests[0]?.body).toEqual({ ...request, model: DEFAULT_MODEL });
-    // Passing the same object with `model` set sends it byte-for-byte.
-    await client.systemOne({ ...request, model: "explicit" });
-    expect(requests[1]?.body).toEqual({ ...request, model: "explicit" });
-  });
-
-  it("honors per-call model and client defaultModel", async () => {
-    const { fetch, requests } = mockFetch(() => json(SYSTEM_ONE_RESPONSE));
-    const client = new TypeSafeClient({ apiKey: "k", fetch, defaultModel: "client-default" });
-    await client.systemOne({ state: "s", questions: { q: choice("c", { a: null }) } });
-    await client.systemOne({
-      state: "s",
-      questions: { q: choice("c", { a: null }) },
-      model: "per-call",
-    });
-    expect(requests[0]?.body).toMatchObject({ model: "client-default" });
-    expect(requests[1]?.body).toMatchObject({ model: "per-call" });
-  });
-
-  it("aborting the caller's signal aborts the signal handed to fetch, and wraps the error", async () => {
-    const ac = new AbortController();
-    const { fetch, requests } = mockFetch(() => {
-      ac.abort();
-      throw new DOMException("aborted", "AbortError");
-    });
-    const client = new TypeSafeClient({ apiKey: "k", fetch });
-    await expect(client.models.list({ signal: ac.signal })).rejects.toBeInstanceOf(
-      APIUserAbortError,
-    );
-    expect(requests[0]?.init?.signal?.aborted).toBe(true);
-  });
-
-  it("wraps network failures in APIConnectionError with the cause", async () => {
-    const boom = new TypeError("fetch failed");
-    const { fetch } = mockFetch(() => {
-      throw boom;
-    });
-    const client = new TypeSafeClient({ apiKey: "k", fetch, retry: { maxRetries: 0 } });
-    const err = await client.models.list().catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(APIConnectionError);
-    expect((err as APIConnectionError).cause).toBe(boom);
-    expect((err as Error).message).toContain("fetch failed");
-  });
-});
-
-describe("question builders", () => {
-  it("choice accepts a criteria object as-is", () => {
-    expect(choice("q", { a: "desc", b: null })).toEqual({
-      type: "choice",
-      instructions: "q",
-      criteria: { a: "desc", b: null },
-    });
-  });
-
-  it("choice rejects the removed label-list shorthand in JavaScript too", () => {
-    expect(() => {
-      // @ts-expect-error exercise plain JavaScript input
-      choice("q", ["a", "b"]);
-    }).toThrow(TypeSafeError);
-  });
-
-  it("noul allows describing one side, both, or neither", () => {
-    expect(noul("q")).toEqual({ type: "noul", instructions: "q", criteria: undefined });
-    expect(noul("q", { true: "yes means this" })).toEqual({
-      type: "noul",
-      instructions: "q",
-      criteria: { true: "yes means this" },
-    });
-    expect(noul("q", { false: "no means this" }).criteria).toEqual({ false: "no means this" });
-    expect(noul("q", { true: "a", false: "b" }).criteria).toEqual({ true: "a", false: "b" });
-  });
-
-  it("descriptions can be JSON objects, not only strings", () => {
-    const rich = { summary: "warm", examples: ["hi!", "welcome"] };
-    expect(choice("q", { friendly: rich, hostile: null }).criteria.friendly).toEqual(rich);
-    expect(score("q", [rich, "meh"]).criteria[0]).toEqual(rich);
-    expect(noul("q", { true: rich }).criteria?.true).toEqual(rich);
-  });
-
-  it("choice answers carry the winning label", async () => {
-    const { fetch } = mockFetch(() =>
-      json({
-        model: "m",
-        answers: {
-          q: { type: "choice", choice: "b", confidence: 0.9, probabilities: { a: 0.1, b: 0.9 } },
+  it.effect("merges headers case insensitively and protects SDK headers", () =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp(() => Effect.sync(() => jsonResponse(ANSWER)));
+      const client = yield* makeClient(http, {
+        defaultHeaders: {
+          "X-Custom": "base",
+          AUTHORIZATION: "fake",
+          "CONTENT-TYPE": "bad",
+          "X-TypeSafe-Retry-Count": "50",
         },
-        usage: { input_tokens: 1, output_tokens: 1 },
-      }),
-    );
-    const r = await new TypeSafeClient({ apiKey: "k", fetch }).systemOne({
-      state: "s",
-      questions: {
-        q: choice("q", { a: null, b: null }),
-      },
+      });
+      yield* client.systemOne(
+        { state: null, questions: { ok: noul() } },
+        {
+          headers: {
+            "x-custom": "call",
+            ACCEPT: "bad",
+            "X-TYPESAFE-SDK": "bad",
+            "User-Agent": "bad",
+            "X-TypeSafe-Runtime": "bad",
+          },
+        },
+      );
+      const headers = calls[0]?.request.headers;
+      expect(headers).toMatchObject({
+        authorization: "Bearer test-secret",
+        "x-custom": "call",
+        "content-type": "application/json",
+        accept: "application/json",
+      });
+      expect(headers?.["x-typesafe-retry-count"]).toBeUndefined();
+      expect(headers?.["x-typesafe-sdk"]).toMatch(/^@compootor\/effective-jev\//);
+      expect(headers?.["user-agent"]).toMatch(/^@compootor\/effective-jev\//);
+      expect(headers?.["x-typesafe-runtime"]).toContain("node/");
+    }),
+  );
+
+  it.effect("omits content type and body on model requests", () =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp();
+      const client = yield* makeClient(http, { defaultHeaders: { "Content-Type": "bad" } });
+      yield* client.models.list();
+      expect(calls[0]?.request.headers["content-type"]).toBeUndefined();
+      expect(calls[0]?.request.body._tag).toBe("Empty");
+      expect(calls[0]?.url.href).toBe("https://typesafe.test/v1/models");
+    }),
+  );
+
+  it.effect("preserves nulls, extra fields, structured descriptions, and model overrides", () =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp(() => Effect.sync(() => jsonResponse(ANSWER)));
+      const client = yield* makeClient(http, { defaultModel: "default" });
+      const request = {
+        state: [null, { text: "hello" }],
+        questions: { ok: { type: "noul" as const, criteria: { true: { examples: ["yes"] } } } },
+        model: "override",
+        extra: null,
+      };
+      yield* client.systemOne(request);
+      expect(requestBody(calls[0])).toEqual(request);
+      yield* client.systemOne({ state: null, questions: { ok: noul(null, { false: null }) } });
+      expect(requestBody(calls[1])).toEqual({
+        state: null,
+        questions: { ok: { type: "noul", instructions: null, criteria: { false: null } } },
+        model: "default",
+      });
+    }),
+  );
+
+  it.effect("retains raw bodies and response metadata after decoding", () =>
+    Effect.gen(function* () {
+      const raw = { ...MODEL_BODY, internal: { account: true } };
+      const { http } = mockHttp(() =>
+        Effect.sync(() => jsonResponse(raw, 200, { "x-typesafe-request-id": "req_test" })),
+      );
+      const client = yield* makeClient(http);
+      const result = yield* client.models.listWithResponse();
+      expect(result.data).toEqual([MODEL]);
+      expect(result.requestId).toBe("req_test");
+      expect(result.response.status).toBe(200);
+      expect(JSON.parse(yield* result.response.text)).toEqual(raw);
+      expect(yield* result.response.json).toEqual(raw);
+    }),
+  );
+
+  it.effect("preserves own __proto__ question and criteria names", () =>
+    Effect.gen(function* () {
+      const questions = { ["__proto__"]: choice(null, { ["__proto__"]: null, other: null }) };
+      const body = {
+        ...ANSWER,
+        answers: {
+          ["__proto__"]: {
+            type: "choice",
+            choice: "__proto__",
+            confidence: 0.9,
+            probabilities: { ["__proto__"]: 0.9, other: 0.1 },
+          },
+        },
+      };
+      const { http, calls } = mockHttp(() => Effect.sync(() => jsonResponse(body)));
+      const result = yield* (yield* makeClient(http)).systemOne({ state: null, questions });
+      expect(Object.hasOwn(result.answers, "__proto__")).toBe(true);
+      expect(result.answers).toEqual(body.answers);
+      expect(requestBody(calls[0])).toMatchObject({ questions });
+    }),
+  );
+
+  it.effect.each([
+    { state: null, questions: {} },
+    { state: 1, questions: { ok: noul() } },
+    { state: null, questions: { q: { type: "score", criteria: ["one"] } } },
+    { state: null, questions: { q: { type: "score", criteria: { 0: "a", 1: "b" } } } },
+    { state: null, questions: { q: { type: "choice", criteria: [] } } },
+    { state: null, questions: { q: { type: "choice", criteria: {} } } },
+    { state: null, questions: { q: { type: "noul", instructions: 1 } } },
+    { state: null, questions: { q: { type: "unknown" } } },
+  ])("validates malformed JavaScript input before sending %#", (request) =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp();
+      const client = yield* makeClient(http);
+      const error = yield* client
+        .systemOne(request as unknown as SystemOneRequest)
+        .pipe(Effect.flip);
+      expect(error._tag).toBe("InvalidRequestError");
+      expect(calls).toHaveLength(0);
+    }),
+  );
+
+  it.effect("fails cycles and bigint encoding in the error channel", () =>
+    Effect.gen(function* () {
+      const { http, calls } = mockHttp();
+      const client = yield* makeClient(http);
+      const cycle: Record<string, unknown> = {};
+      cycle.self = cycle;
+      for (const state of [cycle, { bigint: 1n }]) {
+        const error = yield* client
+          .systemOne({ state, questions: { ok: noul() } } as SystemOneRequest)
+          .pipe(Effect.flip);
+        expect(error._tag).toBe("InvalidRequestError");
+      }
+      expect(calls).toHaveLength(0);
+    }),
+  );
+
+  it("builds questions as plain values with rich criteria", () => {
+    expect(noul()).toEqual({ type: "noul", instructions: null, criteria: undefined });
+    expect(choice(null, { yes: ["a"], no: null })).toEqual({
+      type: "choice",
+      instructions: null,
+      criteria: { yes: ["a"], no: null },
     });
-    expect(r.answers.q.choice).toBe("b");
-  });
-
-  it("score keeps the list it was given and rejects maps", () => {
-    expect(score("q", ["bad", "good"]).criteria).toEqual(["bad", "good"]);
-    // biome-ignore lint/suspicious/noExplicitAny: deliberately malformed, as a JS caller might send
-    expect(() => score("q", { 0: "bad", 1: "good" } as any)).toThrow(
-      "Score criteria must be a list of descriptions indexed by score from zero, not a map.",
-    );
-  });
-});
-
-describe("wire format", () => {
-  it("preserves null state, instructions, and criteria values", async () => {
-    const { fetch, requests } = mockFetch(() => json(SYSTEM_ONE_RESPONSE));
-    const questions = {
-      noul: noul(null, { true: null, false: null }),
-      noCriteria: noul(null, null),
-      choice: choice(null, { yes: null, no: null }),
-      score: score(null, [null, "high"]),
-    };
-    await new TypeSafeClient({ apiKey: "k", fetch }).systemOne({ state: null, questions });
-    expect(requests[0]?.body).toEqual({ model: DEFAULT_MODEL, state: null, questions });
-  });
-
-  it("allows omitted instructions and preserves JSON arrays", async () => {
-    const { fetch, requests } = mockFetch(() => json(SYSTEM_ONE_RESPONSE));
-    const questions = {
-      noul: { type: "noul", criteria: null },
-      choice: { type: "choice", criteria: { yes: [null, { example: true }] } },
-      score: { type: "score", criteria: [[null, "low"], null] },
-      arrayInstructions: noul([null, { examples: [1, false] }], { true: ["yes", null] }),
-      defaultInstructions: noul(),
-    } satisfies Questions;
-    const state = [null, { messages: ["hello"] }];
-    await new TypeSafeClient({ apiKey: "k", fetch }).systemOne({ state, questions });
-    expect(requests[0]?.body).toEqual({
-      model: DEFAULT_MODEL,
-      state,
-      questions: {
-        ...questions,
-        defaultInstructions: { type: "noul", instructions: null },
-      },
-    });
-  });
-
-  const send = async (questions: Questions) => {
-    const { fetch, requests } = mockFetch(() => json(SYSTEM_ONE_RESPONSE));
-    await new TypeSafeClient({ apiKey: "k", fetch }).systemOne({ state: "s", questions });
-    const body = requests[0]?.body as
-      | { questions: Record<string, { criteria: unknown }> }
-      | undefined;
-    return body?.questions ?? {};
-  };
-
-  it("sends choice criteria without rewriting", async () => {
-    const wire = await send({ q: choice("which?", { a: null, b: null }) });
-    expect(wire.q?.criteria).toEqual({ a: null, b: null });
-  });
-
-  it("sends a score list untouched", async () => {
-    const wire = await send({ q: score("q", ["bad", "ok", "great"]) });
-    expect(wire.q?.criteria).toEqual(["bad", "ok", "great"]);
-  });
-
-  it("rejects non-list score criteria, fewer than two criteria, and empty question sets before sending", async () => {
-    const { fetch, requests } = mockFetch(() => json(SYSTEM_ONE_RESPONSE));
-    const client = new TypeSafeClient({ apiKey: "k", fetch });
-    // biome-ignore lint/suspicious/noExplicitAny: deliberately malformed, as a JS caller might send
-    const bad = (criteria: any) =>
-      client.systemOne({ state: "s", questions: { q: { type: "score", criteria } } });
-    expect(() => bad({ 0: "bad", 1: "ok" })).toThrow(TypeSafeError);
-    expect(() => bad({ 0: "bad", 1: "ok" })).toThrow(
-      'Score question "q" has criteria that are not a list',
-    );
-    expect(() => bad([])).toThrow(
-      'Score question "q" has 0 criteria; at least two scores are required.',
-    );
-    expect(() => bad(["only"])).toThrow("at least two scores");
-    expect(() => client.systemOne({ state: "s", questions: {} })).toThrow(
-      "At least one question is required",
-    );
-    expect(requests).toHaveLength(0);
-  });
-});
-
-describe("1.0 primitive contract", () => {
-  it("uses a ten-second default and keeps raw metadata access", async () => {
-    const { fetch, requests } = mockFetch(() =>
-      json(SYSTEM_ONE_RESPONSE, { headers: { "x-typesafe-request-id": "req_1" } }),
-    );
-    const client = new TypeSafeClient({ apiKey: "k", fetch });
-    expect(client.timeout).toBe(10000);
-    const result = await client
-      .systemOne({ state: "s", questions: { q1: noul("?") } })
-      .withResponse();
-    expect(result.data).toEqual(SYSTEM_ONE_RESPONSE);
-    expect(result.requestId).toBe("req_1");
-    expect(requests).toHaveLength(1);
-  });
-
-  it("forwards extra fields and null", async () => {
-    const { fetch, requests } = mockFetch(() => json(SYSTEM_ONE_RESPONSE));
-    const client = new TypeSafeClient({ apiKey: "k", fetch });
-    const request = {
-      state: "s",
-      questions: { q: score("?", ["low", "high"]) },
-      future_option: null,
-      nested: { enabled: true },
-    };
-    await client.systemOne(request);
-    expect(requests[0]?.body).toEqual({ ...request, model: "jev-latest" });
-    await client.systemOne({ state: "s", questions: { q: noul("?") } });
-    expect(requests[1]?.body).not.toHaveProperty("future_option");
+    expect(score("level", [null, { text: "high" }]).criteria).toEqual([null, { text: "high" }]);
   });
 });

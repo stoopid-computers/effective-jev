@@ -12,7 +12,7 @@
     "noFallthroughCasesInSwitch": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
-    "isolatedDeclarations": true,
+    "allowImportingTsExtensions": true,
 
     "declaration": true,
     "noEmit": true,

@@ -4,7 +4,7 @@
   "plugin": ["typedoc-plugin-markdown"],
   "out": "../build/docs",
   "readme": "none",
-  "name": "JavaScript SDK",
+  "name": "Effective Jev",
   "excludePrivate": true,
   "excludeProtected": true,
   "excludeInternal": true,

@@ -1,36 +1,86 @@
-// Publish the already-tested tarball. A retry can skip only an identical registry artifact.
+import assert from "node:assert/strict";
+import { appendFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { gt } from "semver";
+import { verifyJsr } from "./publish-jsr.mjs";
+import { registryJson, run, visible } from "./registry.mjs";
+import { artifact, releaseInfo, sourceManifest, validateRelease } from "./release-lib.mjs";
 
-import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
-
-const files = readdirSync("release").filter((file) => file.endsWith(".tgz"));
-if (files.length !== 1) throw new Error("Expected exactly one release tarball");
-// The ./ prefix prevents npm from interpreting this as GitHub owner/repository shorthand.
-const tarball = `./release/${files[0]}`;
-const { name, version } = JSON.parse(readFileSync("package.json", "utf8"));
-const integrity = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
-const existing = spawnSync("npm", ["view", `${name}@${version}`, "dist.integrity", "--json"], {
-  encoding: "utf8",
-});
-if (existing.status === 0) {
-  if (JSON.parse(existing.stdout) !== integrity)
-    throw new Error("This version is already on npm with different contents");
-  console.log(`${name}@${version} is already published with identical contents.`);
-} else {
-  let error;
-  try {
-    error = JSON.parse(existing.stdout);
-  } catch {
-    /* npm can fail before producing JSON */
-  }
-  if (error?.error?.code !== "E404") throw new Error(`Registry lookup failed: ${existing.stderr}`);
-  const result = spawnSync(
-    "npm",
-    ["publish", tarball, "--access", "public", "--tag", "latest", "--provenance"],
-    {
-      stdio: "inherit",
-    },
+const packageUrl = (info) => `https://registry.npmjs.org/${encodeURIComponent(info.name)}`;
+const versionUrl = (info) => `${packageUrl(info)}/${info.version}`;
+const sameArtifact = (published, info) => {
+  assert.equal(published.name, info.name, "Registry returned another package.");
+  assert.equal(published.version, info.version, "Registry returned another version.");
+  assert.equal(
+    published.dist?.integrity,
+    info.integrity,
+    "This npm version has different contents. Choose a new version.",
   );
-  if (result.status !== 0) process.exit(result.status ?? 1);
+};
+
+export function npmTag(info, pkg) {
+  const globalTag = info.prerelease ? "next" : "latest";
+  const versions = Object.keys(pkg?.versions ?? {}).filter(
+    (version) => releaseInfo(version).prerelease === info.prerelease,
+  );
+  const current = pkg?.["dist-tags"]?.[globalTag];
+  if (current) versions.push(current);
+  return versions.some((version) => gt(version, info.version)) ? info.channel : globalTag;
+}
+
+export async function publishNpm(info, { read = registryJson, execute = run } = {}) {
+  const existing = await read(versionUrl(info));
+  if (existing !== undefined) {
+    sameArtifact(existing, info);
+  } else {
+    const pkg = await read(packageUrl(info));
+    for (const version of Object.keys(pkg?.versions ?? {})) {
+      const previous = releaseInfo(version);
+      if (previous.channel === info.channel) {
+        assert.ok(
+          gt(info.version, version),
+          `Version ${version} already exists on this release line.`,
+        );
+      }
+    }
+    execute("npm", [
+      "publish",
+      info.tarball,
+      "--ignore-scripts",
+      "--access",
+      "public",
+      "--tag",
+      npmTag(info, pkg),
+      "--provenance",
+      "--registry",
+      "https://registry.npmjs.org",
+    ]);
+  }
+  sameArtifact(await visible(versionUrl(info), read), info);
+  console.log(`Verified ${info.name}@${info.version} on npm.`);
+}
+
+export async function verifyNpm(info, read = registryJson) {
+  sameArtifact(await visible(versionUrl(info), read), info);
+  const pkg = await read(packageUrl(info));
+  assert.ok(pkg?.["dist-tags"], "npm package metadata is unavailable.");
+  return !info.prerelease && pkg["dist-tags"].latest === info.version;
+}
+
+if (fileURLToPath(import.meta.url) === resolve(process.argv[1] ?? "")) {
+  assert.ok(
+    process.argv.length === 2 || (process.argv.length === 3 && process.argv[2] === "--verify"),
+    "Use --verify or no arguments.",
+  );
+  validateRelease({ remote: true, publish: true });
+  const info = artifact();
+  if (process.argv[2] === "--verify") {
+    await verifyJsr(info, sourceManifest(process.cwd(), true));
+    const latest = await verifyNpm(info);
+    if (process.env.GITHUB_OUTPUT)
+      appendFileSync(process.env.GITHUB_OUTPUT, `make_latest=${latest}\n`);
+  } else {
+    await publishNpm(info);
+  }
 }

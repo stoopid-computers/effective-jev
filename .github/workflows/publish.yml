@@ -1,104 +1,114 @@
-name: Publish npm
+name: Release
 
 on:
   push:
-    tags: ['v[0-9]*']
+    branches: ['release/**']
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Build and test without publishing or creating a release'
+        description: 'Validate and package without publishing. Select a version tag to publish.'
         type: boolean
         default: true
 
 permissions: {}
 
+# Serialize registry changes, including maintenance branches and reruns.
 concurrency:
-  group: publish-npm
+  group: release-registries
   cancel-in-progress: false
 
 jobs:
-  publish:
-    if: github.repository == 'typesafe-ai/typesafe-sdk-js'
+  package:
+    if: github.repository == 'stoopid-computers/effective-jev'
     runs-on: ubuntu-latest
-    environment: npm
     permissions:
-      contents: write
-      id-token: write
-    env:
-      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      contents: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      filename: ${{ steps.release.outputs.filename }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.13'
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           package-manager-cache: false
-          registry-url: https://registry.npmjs.org
       - run: npm install --global npm@11.19.0
-      - name: Validate public release tag and extract changelog notes
+      - run: npm ci
+      - name: Validate release branch, tag, versions, and notes
         id: release
+        run: npm run release:check -- --remote
+      - name: Test and package both registries
+        run: npm run release:pack
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: package
+    if: >-
+      github.ref_type == 'tag' &&
+      (github.event_name == 'push' || inputs.dry_run == false)
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: npm install --global npm@11.19.0
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ github.sha }}
+          path: release/
+      - name: Require the exact public release commit
         env:
           REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
         run: |
-          if [ "$DRY_RUN" = true ]; then
-            TAG="v$(node -p 'require("./package.json").version')"
-          else
-            test "$REPOSITORY_PRIVATE" = false || { echo 'Repository must be public for npm provenance; use dry_run=true for testing'; exit 1; }
-            test "$GITHUB_REF_TYPE" = tag || { echo 'Select a public version tag for publication'; exit 1; }
-            TAG="$GITHUB_REF_NAME"
-            git merge-base --is-ancestor HEAD origin/main || { echo 'Release tag must be on public main'; exit 1; }
-          fi
-          node scripts/check-version.mjs
-          python3 .github/scripts/release_notes.py "$TAG" "$(node -p 'require("./package.json").version')"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-      - run: npm ci
-      - name: Build from public source and check the package
-        run: |
-          npm run build
-          npm run test:dist
-          npm run check:package
-      - name: Pack and test the installable artifact
-        run: |
-          mkdir release
-          npm pack --pack-destination release
-          mv release-notes.md release/
-          node scripts/test-tarball.mjs
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: npm-release
-          path: release/
-          if-no-files-found: error
-      - name: Publish tested tarball with public provenance
-        if: env.DRY_RUN != 'true'
+          test "$REPOSITORY_PRIVATE" = false || { echo 'Registry provenance requires a public repository'; exit 1; }
+          npm run release:check -- --remote --publish
+      - name: Publish the tested npm tarball
         env:
-          # Optional first-publication token; remove after configuring npm OIDC trust.
+          # First publication only, until the npm trusted publisher can be configured.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: node scripts/publish-npm.mjs
-      - name: Create or update GitHub release from changelog
-        if: env.DRY_RUN != 'true'
+        run: npm run release:publish:npm
+      - name: Publish matching TypeScript sources to JSR
+        run: npm run release:publish:jsr
+      - name: Verify both registries and select GitHub latest status
+        id: verify
+        run: npm run release:verify
+      - name: Create or update the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TITLE: ${{ steps.release.outputs.title }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TAG: ${{ needs.package.outputs.tag }}
+          RELEASE_PRERELEASE: ${{ needs.package.outputs.prerelease }}
+          RELEASE_LATEST: ${{ steps.verify.outputs.make_latest }}
+          RELEASE_FILENAME: ${{ needs.package.outputs.filename }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes-file release/release-notes.md
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file release/release-notes.md --draft=false --prerelease="$RELEASE_PRERELEASE" --latest="$RELEASE_LATEST"
           else
-            gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TITLE" --notes-file release/release-notes.md
+            gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --notes-file release/release-notes.md --prerelease="$RELEASE_PRERELEASE" --latest="$RELEASE_LATEST"
           fi
-          gh release upload "$RELEASE_TAG" release/*.tgz --clobber
+          gh release upload "$RELEASE_TAG" "release/$RELEASE_FILENAME" release/SHA256SUMS release/release.json release/source-files.json release/jsr-files.json --clobber
       - name: Summarize release
         env:
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          if [ "$DRY_RUN" = true ]; then
-            echo 'Dry run passed. Review the npm-release artifact. No package or GitHub Release was published.' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Published $RELEASE_TAG from its public source and updated the GitHub Release." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          RELEASE_TAG: ${{ needs.package.outputs.tag }}
+        run: echo "Verified $RELEASE_TAG on npm and JSR and attached its package and checksums to GitHub Releases." >> "$GITHUB_STEP_SUMMARY"

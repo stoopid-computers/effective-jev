@@ -1,2 +1,2 @@
-// Keep in sync with package.json "version". Checked by `npm run check:version`.
-export const VERSION = "0.6.0";
+/** SDK version, kept in sync with package metadata. */
+export const VERSION = "0.0.1";
