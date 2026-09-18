@@ -11,7 +11,7 @@ try {
   writeFileSync(join(consumer, "package.json"), '{"private":true}');
   execFileSync(
     "npm",
-    ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--offline", resolve(tarball)],
+    ["install", "--ignore-scripts", "--no-audit", "--no-fund", resolve(tarball)],
     { cwd: consumer, stdio: "inherit" },
   );
   for (const type of ["commonjs", "module"]) {
