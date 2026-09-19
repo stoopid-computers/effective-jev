@@ -1,6 +1,6 @@
 {
   "name": "@compootor/effective-jev",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Effect v4 SDK for the TypeSafe Jev API",
   "license": "MIT",
   "author": "evinism",
@@ -47,7 +47,7 @@
     "check:package": "node scripts/check-package.mjs",
     "prepublishOnly": "node scripts/release.mjs check --publish",
     "demo": "tsx examples/demo.ts",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run check:version && npm run test:release && npm run test:coverage && npm run build && npm run test:dist && npm run check:package",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run check:version && npm run test:release && npm run test:coverage && npm run test:deno && npm run build && npm run test:dist && npm run check:package",
     "docs": "npm ci --prefix docs --ignore-scripts --no-audit --no-fund && npm run --prefix docs build",
     "prepack": "npm run build",
     "test:release": "node --test test/release/*.test.mjs",
@@ -58,7 +58,8 @@
     "release:publish:npm": "node scripts/publish-npm.mjs",
     "release:publish:jsr": "node scripts/publish-jsr.mjs",
     "release:verify": "node scripts/publish-npm.mjs --verify",
-    "prepare": "effect-tsgo patch --typescript --oxlint"
+    "prepare": "effect-tsgo patch --typescript --oxlint",
+    "test:deno": "deno test --config test/deno/deno.json --frozen --no-prompt --allow-net=127.0.0.1 --allow-env=TYPESAFE_API_KEY,TYPESAFE_BASE_URL,TYPESAFE_DEFAULT_MODEL test/deno/sdk.deno.ts"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.0.4 (2026-09-19)
+
+### Fixes
+
+- Support Deno 2.6.7 and newer with JSR imports and native fetch.
+- Read only the SDK's three environment settings in Deno instead of enumerating every variable. Explicit options and custom Effect ConfigProviders keep their precedence; denied permissions return a `TypeSafeConfigError` with the required flag.
+- Add Deno installation and permission commands to the README, and run real Deno HTTP tests before releases.
+- Wait up to five minutes for accepted registry uploads to become visible, avoiding failed releases caused by npm metadata delays.
+
 ## v0.0.3 (2026-09-19)
 
 JSR can now analyze the SDK's public types and generate its declarations and API documentation without the slow-types override.

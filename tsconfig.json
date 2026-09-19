@@ -26,5 +26,5 @@
     ]
   },
   "include": ["src", "examples", "test", "types", "*.config.ts"],
-  "exclude": ["test/dist"]
+  "exclude": ["test/dist", "test/deno"]
 }

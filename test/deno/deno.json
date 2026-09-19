@@ -1,0 +1,12 @@
+{
+  "nodeModulesDir": "none",
+  "imports": {
+    "@compootor/effective-jev": "../../src/index.ts",
+    "effect": "npm:effect@4.0.0-rc.112",
+    "effect/unstable/http": "npm:effect@4.0.0-rc.112/unstable/http"
+  },
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true
+  }
+}

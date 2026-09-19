@@ -8,21 +8,29 @@ Ask Jev to choose a label, answer a yes/no question, or score something against 
 
 ## Quick start
 
-Requires **Node.js 20.19+**, **Effect `4.0.0-rc.112`**, and a TypeSafe API key. The package includes ESM, CommonJS, and TypeScript declarations.
+Use **Node.js 20.19+** or **Deno 2.6.7+**, **Effect `4.0.0-rc.112`**, and a TypeSafe API key. npm includes ESM, CommonJS, and TypeScript declarations; JSR provides TypeScript sources.
 
 ### 1. Install the SDK
 
-Both registries use the name `@compootor/effective-jev`. Once a release is available, install from npm:
+Both registries use the name `@compootor/effective-jev`.
+
+**Node.js**
 
 ```sh
 npm install @compootor/effective-jev effect@4.0.0-rc.112
 npm install --save-dev tsx
 ```
 
-Install the exact Effect version above; the SDK uses v4 APIs that can change between prereleases.
+**Deno**
+
+```sh
+deno add jsr:@compootor/effective-jev npm:effect@4.0.0-rc.112
+```
+
+Both commands support the imports in the examples below. Install the exact Effect version shown; the SDK uses v4 APIs that can change between prereleases.
 
 <details>
-<summary>Install from JSR or an unpublished checkout</summary>
+<summary>Use JSR with Node.js, or test a local checkout</summary>
 
 For JSR, use this instead of the npm package install:
 
@@ -32,7 +40,7 @@ npm install effect@4.0.0-rc.112
 npm install --save-dev tsx
 ```
 
-The examples below use the same `@compootor/effective-jev` import with either registry. In Deno, use `deno add jsr:@compootor/effective-jev`.
+The examples below use the same `@compootor/effective-jev` import with either registry.
 
 To try local changes before publication, run these commands in the checkout:
 
@@ -89,11 +97,22 @@ console.log(result.answers.category.choice);
 // TypeScript knows this is "billing" | "technical" | "other".
 ```
 
-Run it:
+Run it with Node.js:
 
 ```sh
 npx tsx ask.mts
 ```
+
+Or with Deno:
+
+```sh
+deno run --check \
+  --allow-net=api.typesafe.ai \
+  --allow-env=TYPESAFE_API_KEY,TYPESAFE_BASE_URL,TYPESAFE_DEFAULT_MODEL \
+  ask.mts
+```
+
+Deno only needs network access to the API host and read access to those three settings. If you set a custom `baseURL`, allow its host instead. Explicit client options skip their environment reads. Providing all three options, or your own `ConfigProvider`, removes the SDK's need for `--allow-env`.
 
 You will see one of your labels, such as `billing`. The answer also includes confidence and a probability for each label. All answers come with the model name and token usage.
 
@@ -416,7 +435,7 @@ Question helpers now return plain values; invalid inputs fail when the request E
 
 ## Development
 
-From this checkout:
+Install Node.js 24, npm 11.19.0, and Deno 2.6.7 or newer, then run:
 
 ```sh
 npm ci
@@ -431,6 +450,7 @@ npm run check
 | `npm run lint:fix`     | Apply available safe lint fixes                                                                     |
 | `npm run format`       | Format with Oxfmt                                                                                   |
 | `npm run format:check` | Check formatting without changing files                                                             |
+| `npm run test:deno`    | Type-check and run the SDK in Deno with a local HTTP server and restricted permissions              |
 
 `npm ci` runs [Effect's TSGo patcher](https://github.com/Effect-TS/tsgo) for TypeScript and Oxlint. Their versions are pinned together because the patches require compatible binaries. Effect's recommended rules apply to the SDK and example; correctness checks also cover tests and release scripts.
 
@@ -438,7 +458,7 @@ For VS Code or Cursor, install the recommended **TypeScript 7** and **Oxc** exte
 
 [ts-reset](https://www.totaltypescript.com/ts-reset) tightens global types during development through `types/reset.d.ts`. This file stays outside the published sources and declarations, so importing the SDK does not change your application's global types.
 
-`check` runs formatting, lint, type checks, metadata checks, release-tool tests, SDK tests with coverage, builds, ESM/CommonJS smoke tests, and package validation. Tests use injected clients and a local HTTP server.
+`check` runs formatting, lint, type checks, metadata checks, release-tool tests, SDK tests with coverage, Deno tests, builds, ESM/CommonJS smoke tests, and package validation. Tests use injected clients and a local HTTP server. CI tests Deno 2.6.7 and 2.9.7; Deno checks also run before publishing.
 
 `npm run demo` makes a real request using `TYPESAFE_API_KEY`. `npm run test:integration` runs live API tests when that key is set. Both use your account's API quota. `npm pack` builds a fresh local archive. `npm run release:pack` also checks JSR, tests a clean installation, and writes release files to `release/`. Neither command publishes anything.
 

@@ -38,6 +38,9 @@ jobs:
           node-version: "24"
           package-manager-cache: false
       - run: npm install --global npm@11.19.0
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: "2.9.7"
       - run: npm ci
       - name: Validate release branch, tag, versions, and notes
         id: release

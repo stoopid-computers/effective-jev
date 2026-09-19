@@ -15,11 +15,13 @@ export async function registryJson(url, fetcher = fetch) {
   return response.json();
 }
 
-export async function visible(url, read = registryJson) {
-  for (let attempt = 0; attempt < 6; attempt++) {
+export async function visible(url, read = registryJson, wait = setTimeout) {
+  // Accepted npm uploads can take several minutes to reach public metadata.
+  // Poll the existing version; never repeat the publish operation here.
+  for (let attempt = 0; attempt <= 60; attempt++) {
     const result = await read(url);
     if (result !== undefined) return result;
-    if (attempt < 5) await setTimeout(1_000);
+    if (attempt < 60) await wait(5_000);
   }
   throw new Error(`Published version is not visible yet: ${url}. Rerun the same release.`);
 }

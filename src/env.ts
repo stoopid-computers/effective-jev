@@ -1,4 +1,4 @@
-import { Config, Effect, Redacted, Schema } from "effect";
+import { Config, ConfigProvider, Context, Effect, Redacted, Schema } from "effect";
 import { TypeSafeConfigError } from "./errors.ts";
 import { DEFAULT_RETRY_POLICY, DEFAULT_TIMEOUT_MS, resolveRetryPolicy } from "./retry.ts";
 import { isBrowser } from "./runtime.ts";
@@ -37,8 +37,7 @@ const textConfig = (
       )
     : Schema.decodeEffect(Schema.String)(value);
 
-/** Resolve explicit settings before consulting the active ConfigProvider. */
-export const resolveConfig = (
+const resolveWithProvider = (
   options: TypeSafeClientConfig,
 ): Effect.Effect<ResolvedConfig, TypeSafeConfigError> =>
   Effect.gen(function* () {
@@ -105,3 +104,33 @@ export const resolveConfig = (
           }),
     ),
   );
+
+/** Resolve explicit settings before consulting the active ConfigProvider. */
+export const resolveConfig = (
+  options: TypeSafeClientConfig,
+): Effect.Effect<ResolvedConfig, TypeSafeConfigError> =>
+  Effect.contextWith((context) => {
+    const deno = (globalThis as { Deno?: { env: { get(key: string): string | undefined } } }).Deno;
+    if (!deno || Context.getOrUndefined(context, ConfigProvider.ConfigProvider) !== undefined) {
+      return resolveWithProvider(options);
+    }
+    // Effect's default provider enumerates process.env, which needs unrestricted
+    // environment access in Deno. Read only settings not supplied by the caller.
+    return Effect.gen(function* () {
+      const values: Record<string, string | undefined> = {};
+      for (const option of ["apiKey", "baseURL", "defaultModel"] as const) {
+        if (options[option] !== undefined) continue;
+        const key = ENV[option];
+        values[key] = yield* Effect.try({
+          try: () => deno.env.get(key),
+          catch: () =>
+            new TypeSafeConfigError({
+              message: `Cannot read ${key}. Grant --allow-env=${key} or provide ${option} explicitly.`,
+            }),
+        });
+      }
+      return yield* resolveWithProvider(options).pipe(
+        Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord(values)),
+      );
+    });
+  });

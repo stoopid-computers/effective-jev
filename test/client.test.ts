@@ -85,6 +85,51 @@ describe("configuration and layers", () => {
     }),
   );
 
+  it.effect("reads individual Deno environment keys without enumerating the environment", () =>
+    Effect.gen(function* () {
+      const values: Record<string, string> = { TYPESAFE_API_KEY: " deno-secret " };
+      const get = vi.fn((key: string) => values[key]);
+      vi.stubGlobal("Deno", { env: { get } });
+      const { http, calls } = mockHttp();
+      const client = yield* TypeSafeClient.make({ baseURL: "https://deno.test" }).pipe(
+        Effect.provideService(HttpClient.HttpClient, http),
+      );
+      yield* client.models.list();
+      expect(client.defaultModel).toBe("jev-latest");
+      expect(calls[0]?.request.headers.authorization).toBe("Bearer deno-secret");
+      expect(get.mock.calls).toEqual([["TYPESAFE_API_KEY"], ["TYPESAFE_DEFAULT_MODEL"]]);
+    }),
+  );
+
+  it.effect("preserves an explicit ConfigProvider in Deno without reading the environment", () =>
+    Effect.gen(function* () {
+      const get = vi.fn(() => {
+        throw new Error("Denied");
+      });
+      vi.stubGlobal("Deno", { env: { get } });
+      const client = yield* makeClient(mockHttp().http).pipe(
+        configProvider({ TYPESAFE_DEFAULT_MODEL: "custom-model" }),
+      );
+      expect(client.defaultModel).toBe("custom-model");
+      expect(get).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("returns a typed Deno permission error with the missing key", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal("Deno", {
+        env: {
+          get: () => {
+            throw new Error("Denied");
+          },
+        },
+      });
+      const error = yield* makeClient(mockHttp().http).pipe(Effect.flip);
+      expect(error._tag).toBe("TypeSafeConfigError");
+      expect(error.message).toContain("--allow-env=TYPESAFE_DEFAULT_MODEL");
+    }),
+  );
+
   it.effect.each([
     { apiKey: " " },
     { baseURL: "not a URL" },
