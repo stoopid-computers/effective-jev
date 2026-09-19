@@ -83,9 +83,7 @@ const program = Effect.gen(function* () {
   });
 });
 
-const result = await Effect.runPromise(
-  program.pipe(Effect.provide(TypeSafeClient.layerFetch())),
-);
+const result = await Effect.runPromise(program.pipe(Effect.provide(TypeSafeClient.layerFetch())));
 
 console.log(result.answers.category.choice);
 // TypeScript knows this is "billing" | "technical" | "other".
@@ -107,11 +105,11 @@ Creating an Effect sends nothing. Running the same Effect twice sends two reques
 
 Choose a question by the answer you need. You can mix all three in one request.
 
-| You need | Helper | Answer |
-| --- | --- | --- |
-| One label from a known set | `choice` | Selected label, confidence, and probabilities |
-| The probability that something is true | `noul` | A number from `0` for no to `1` for yes |
-| A rating across ordered levels | `score` | A score, confidence, probabilities, and the original levels |
+| You need                               | Helper   | Answer                                                      |
+| -------------------------------------- | -------- | ----------------------------------------------------------- |
+| One label from a known set             | `choice` | Selected label, confidence, and probabilities               |
+| The probability that something is true | `noul`   | A number from `0` for no to `1` for yes                     |
+| A rating across ordered levels         | `score`  | A score, confidence, probabilities, and the original levels |
 
 ```ts
 import { choice, noul, score } from "@compootor/effective-jev";
@@ -123,9 +121,7 @@ const questions = {
     other: null,
   }),
   urgent: noul("Does the customer need help today?"),
-  frustration: score("How frustrated is the customer?", [
-    "Calm", "Frustrated", "Angry",
-  ]),
+  frustration: score("How frustrated is the customer?", ["Calm", "Frustrated", "Angry"]),
 };
 ```
 
@@ -160,9 +156,7 @@ Use `program.pipe(Effect.provide(ClientLive))` in the quick start. The API key s
 import { Effect } from "effect";
 import { TypeSafeClient } from "@compootor/effective-jev";
 
-const program = TypeSafeClient.use((client) =>
-  client.models.listWithResponse(),
-);
+const program = TypeSafeClient.use((client) => client.models.listWithResponse());
 
 const { data, response, requestId } = await Effect.runPromise(
   program.pipe(Effect.provide(TypeSafeClient.layerFetch())),
@@ -189,9 +183,7 @@ const program = TypeSafeClient.use((client) => client.models.list()).pipe(
   ),
 );
 
-await Effect.runPromise(
-  program.pipe(Effect.provide(TypeSafeClient.layerFetch())),
-);
+await Effect.runPromise(program.pipe(Effect.provide(TypeSafeClient.layerFetch())));
 ```
 
 See [errors](#errors) for every error tag and what to do about it.
@@ -226,9 +218,7 @@ import { Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { TypeSafeClient } from "@compootor/effective-jev";
 
-const ClientLive = TypeSafeClient.layer().pipe(
-  Layer.provide(FetchHttpClient.layer),
-);
+const ClientLive = TypeSafeClient.layer().pipe(Layer.provide(FetchHttpClient.layer));
 ```
 
 For a custom `fetch`, provide `Layer.succeed(FetchHttpClient.Fetch, customFetch)` to `FetchHttpClient.layer` or `TypeSafeClient.layerFetch()`. For tests, provide `Layer.succeed(HttpClient.HttpClient, mockClient)`, where `mockClient` comes from `HttpClient.make`.
@@ -245,34 +235,34 @@ Import values and types from `@compootor/effective-jev`. Methods return an `Effe
 
 ### Create and access a client
 
-| API | Use it when |
-| --- | --- |
-| `TypeSafeClient.layerFetch(options?)` | You want the default fetch transport. Start here. |
-| `TypeSafeClient.layer(options?)` | You supply an Effect `HttpClient` through `Layer.provide`. |
-| `TypeSafeClient.make(options?)` | You want the client directly inside an Effect. An `HttpClient` must be provided. |
-| `yield* TypeSafeClient` | You need the configured client inside `Effect.gen`. |
-| `TypeSafeClient.use(client => ...)` | You want to call the service without writing a generator. |
+| API                                   | Use it when                                                                      |
+| ------------------------------------- | -------------------------------------------------------------------------------- |
+| `TypeSafeClient.layerFetch(options?)` | You want the default fetch transport. Start here.                                |
+| `TypeSafeClient.layer(options?)`      | You supply an Effect `HttpClient` through `Layer.provide`.                       |
+| `TypeSafeClient.make(options?)`       | You want the client directly inside an Effect. An `HttpClient` must be provided. |
+| `yield* TypeSafeClient`               | You need the configured client inside `Effect.gen`.                              |
+| `TypeSafeClient.use(client => ...)`   | You want to call the service without writing a generator.                        |
 
 The resulting `TypeSafeClientService` exposes `baseURL`, `defaultModel`, and the methods below. Creating it can fail with `TypeSafeConfigError`.
 
 ### Client methods
 
-| Method | Successful result | HTTP endpoint |
-| --- | --- | --- |
-| `systemOne(request, options?)` | `SystemOneResult<Q>` | `POST /v1/systemone` |
-| `systemOneWithResponse(request, options?)` | `WithResponse<SystemOneResult<Q>>` | `POST /v1/systemone` |
-| `models.list(options?)` | `ReadonlyArray<ModelCard>` | `GET /v1/models` |
-| `models.listWithResponse(options?)` | `WithResponse<ReadonlyArray<ModelCard>>` | `GET /v1/models` |
+| Method                                     | Successful result                        | HTTP endpoint        |
+| ------------------------------------------ | ---------------------------------------- | -------------------- |
+| `systemOne(request, options?)`             | `SystemOneResult<Q>`                     | `POST /v1/systemone` |
+| `systemOneWithResponse(request, options?)` | `WithResponse<SystemOneResult<Q>>`       | `POST /v1/systemone` |
+| `models.list(options?)`                    | `ReadonlyArray<ModelCard>`               | `GET /v1/models`     |
+| `models.listWithResponse(options?)`        | `WithResponse<ReadonlyArray<ModelCard>>` | `GET /v1/models`     |
 
 Each returns `Effect<Result, TypeSafeError>`. `Q` is your questions object; TypeScript uses it to infer the answer keys and values.
 
 ### Question helpers
 
-| Signature | Returns | Arguments |
-| --- | --- | --- |
-| `choice(instructions, criteria)` | `ChoiceQuestion<T>` | A nonempty map of labels to descriptions |
-| `noul(instructions?, criteria?)` | `NoulQuestion` | Instructions default to `null`. Optional criteria describe `true`, `false`, or both. |
-| `score(instructions, criteria)` | `ScoreQuestion<T>` | An array of at least two descriptions, ordered from lowest to highest |
+| Signature                        | Returns             | Arguments                                                                            |
+| -------------------------------- | ------------------- | ------------------------------------------------------------------------------------ |
+| `choice(instructions, criteria)` | `ChoiceQuestion<T>` | A nonempty map of labels to descriptions                                             |
+| `noul(instructions?, criteria?)` | `NoulQuestion`      | Instructions default to `null`. Optional criteria describe `true`, `false`, or both. |
+| `score(instructions, criteria)`  | `ScoreQuestion<T>`  | An array of at least two descriptions, ordered from lowest to highest                |
 
 Instructions and descriptions accept `EntryType`: text, JSON objects, JSON arrays, or `null`. Noul criteria may also be `null`. Helpers create plain objects with `type`, `instructions`, and `criteria`; you may write these objects yourself. Validation happens when the request runs.
 
@@ -280,21 +270,21 @@ Instructions and descriptions accept `EntryType`: text, JSON objects, JSON array
 
 `SystemOneRequest<Q>` has three fields:
 
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `state` | Yes | The text or structured context to evaluate |
-| `questions` | Yes | A nonempty object of named questions |
-| `model` | No | Overrides the client's `defaultModel` for this request |
+| Field       | Required | Meaning                                                |
+| ----------- | -------- | ------------------------------------------------------ |
+| `state`     | Yes      | The text or structured context to evaluate             |
+| `questions` | Yes      | A nonempty object of named questions                   |
+| `model`     | No       | Overrides the client's `defaultModel` for this request |
 
 Extra fields on a request variable are forwarded. Explicit `null` values are preserved. The SDK snapshots the encoded request so every retry sends the same body.
 
 `SystemOneResult<Q>` contains `model`, `answers`, and `usage`. Answers use the names you supplied in `questions`:
 
-| Answer type | Fields |
-| --- | --- |
-| `NoulResponse` | `type: "noul"`, `noul` from `0` to `1` |
-| `ChoiceResponse<T>` | `type: "choice"`, `choice`, `confidence`, and `probabilities` keyed by your labels |
-| `ScoreResponse<T>` | `type: "score"`, `score`, `confidence`, `probabilities`, and `legend` keyed by level index |
+| Answer type         | Fields                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------ |
+| `NoulResponse`      | `type: "noul"`, `noul` from `0` to `1`                                                     |
+| `ChoiceResponse<T>` | `type: "choice"`, `choice`, `confidence`, and `probabilities` keyed by your labels         |
+| `ScoreResponse<T>`  | `type: "score"`, `score`, `confidence`, `probabilities`, and `legend` keyed by level index |
 
 Confidence and probabilities range from `0` to `1`. Score legends map each index back to its original description. `usage` contains non-negative integer `input_tokens` and `output_tokens`. Returned data is readonly in TypeScript.
 
@@ -308,15 +298,15 @@ The SDK checks answer keys, question kinds, label names, numeric ranges, and sco
 
 All fields in `TypeSafeClientConfig` are optional. Explicit values win over configuration-provider values, then SDK defaults.
 
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `apiKey` | `TYPESAFE_API_KEY` | Required credential. Accepts a string or `Redacted.Redacted<string>`. |
-| `baseURL` | `TYPESAFE_BASE_URL`, then `https://api.typesafe.ai` | HTTP or HTTPS root URL, without credentials, a query, or a fragment |
-| `defaultModel` | `TYPESAFE_DEFAULT_MODEL`, then `jev-latest` | Model used when the request omits `model` |
-| `timeout` | `10000` | Positive milliseconds allowed per attempt |
-| `retry` | [Retry defaults](#retry-options) | Partial `RetryPolicy` override |
-| `defaultHeaders` | `{}` | Additional string-valued headers |
-| `dangerouslyAllowBrowser` | `false` | Allow browser use, which exposes the API key to page users |
+| Option                    | Default                                             | Meaning                                                               |
+| ------------------------- | --------------------------------------------------- | --------------------------------------------------------------------- |
+| `apiKey`                  | `TYPESAFE_API_KEY`                                  | Required credential. Accepts a string or `Redacted.Redacted<string>`. |
+| `baseURL`                 | `TYPESAFE_BASE_URL`, then `https://api.typesafe.ai` | HTTP or HTTPS root URL, without credentials, a query, or a fragment   |
+| `defaultModel`            | `TYPESAFE_DEFAULT_MODEL`, then `jev-latest`         | Model used when the request omits `model`                             |
+| `timeout`                 | `10000`                                             | Positive milliseconds allowed per attempt                             |
+| `retry`                   | [Retry defaults](#retry-options)                    | Partial `RetryPolicy` override                                        |
+| `defaultHeaders`          | `{}`                                                | Additional string-valued headers                                      |
+| `dangerouslyAllowBrowser` | `false`                                             | Allow browser use, which exposes the API key to page users            |
 
 Environment values are trimmed. Blank optional values use the default; a missing or blank API key fails. Explicit keys are held in Effect's `Redacted` wrapper.
 
@@ -324,27 +314,27 @@ Environment values are trimmed. Blank optional values use the default; a missing
 
 Pass `RequestOptions` as the second argument to `systemOne` or `systemOneWithResponse`, or the first argument to a model-list method.
 
-| Option | Meaning |
-| --- | --- |
-| `timeout` | Override the per-attempt timeout in milliseconds |
-| `retry` | Override only the supplied retry fields; inherit the rest |
+| Option    | Meaning                                                           |
+| --------- | ----------------------------------------------------------------- |
+| `timeout` | Override the per-attempt timeout in milliseconds                  |
+| `retry`   | Override only the supplied retry fields; inherit the rest         |
 | `headers` | Merge with default headers, matching names without regard to case |
 
 Per-request headers win over defaults. SDK-controlled authorization, JSON, identification, and retry-count headers take precedence over both. Pass cancellation signals to `Effect.runPromise`, not to these methods.
 
 ### Retry options
 
-| `RetryPolicy` field | Default | Meaning |
-| --- | --- | --- |
-| `maxRetries` | `2` | Retries after the first attempt. `0` disables retries. |
-| `backoffInitialMs` | `500` | First delay before a retry |
-| `backoffMaxMs` | `5000` | Upper limit as the delay doubles after each failure |
-| `backoffJitter` | `0.25` | Randomly subtract up to this fraction of the delay. Valid range is `0` to `1`. |
-| `httpStatuses` | `408`, `429`, `500` through `599` | A `ReadonlySet<number>` of retryable statuses |
-| `respectRetryAfter` | `true` | Honor the server's requested retry delay |
-| `maxRetryAfterMs` | `60000` | Maximum server delay to honor; larger values fall back to normal backoff |
-| `apiConnectionError` | `true` | Retry connection failures, including interrupted body delivery |
-| `apiTimeoutError` | `true` | Retry per-attempt timeouts |
+| `RetryPolicy` field  | Default                           | Meaning                                                                        |
+| -------------------- | --------------------------------- | ------------------------------------------------------------------------------ |
+| `maxRetries`         | `2`                               | Retries after the first attempt. `0` disables retries.                         |
+| `backoffInitialMs`   | `500`                             | First delay before a retry                                                     |
+| `backoffMaxMs`       | `5000`                            | Upper limit as the delay doubles after each failure                            |
+| `backoffJitter`      | `0.25`                            | Randomly subtract up to this fraction of the delay. Valid range is `0` to `1`. |
+| `httpStatuses`       | `408`, `429`, `500` through `599` | A `ReadonlySet<number>` of retryable statuses                                  |
+| `respectRetryAfter`  | `true`                            | Honor the server's requested retry delay                                       |
+| `maxRetryAfterMs`    | `60000`                           | Maximum server delay to honor; larger values fall back to normal backoff       |
+| `apiConnectionError` | `true`                            | Retry connection failures, including interrupted body delivery                 |
+| `apiTimeoutError`    | `true`                            | Retry per-attempt timeouts                                                     |
 
 `retry-after-ms` takes precedence over `Retry-After`, which accepts seconds or an HTTP date. Valid server delays are used without jitter. Counts must be non-negative integers and delay settings must be finite, non-negative numbers. Request validation failures, response validation failures, and cancellation are not retried.
 
@@ -352,21 +342,21 @@ Per-request headers win over defaults. SDK-controlled authorization, JSON, ident
 
 Each error is an exported class with a `_tag` matching its name and a `message`. Handle it with `Effect.catchTag`.
 
-| Error tag | What to check |
-| --- | --- |
-| `TypeSafeConfigError` | API key, base URL, model, or configuration values |
-| `InvalidRequestError` | Questions, JSON input, or per-request settings |
-| `ResponseValidationError` | The server returned data that does not match the expected shape. Keep its `requestId` when reporting the problem. |
-| `APIConnectionError` | Network or service reachability |
-| `APITimeoutError` | The attempt exceeded `timeoutMs`; check latency or increase the timeout |
-| `BadRequestError` | HTTP `400`: request or model selection |
-| `AuthenticationError` | HTTP `401`: replace an invalid API key |
-| `PermissionDeniedError` | HTTP `403`: account access |
-| `NotFoundError` | HTTP `404`: endpoint or resource |
-| `UnprocessableEntityError` | HTTP `422`: validation details in the response body |
-| `RateLimitError` | HTTP `429`: wait or reduce request volume |
-| `InternalServerError` | HTTP `5xx`: service failure, retried by default |
-| `APIError` | Any other unsuccessful HTTP status |
+| Error tag                  | What to check                                                                                                     |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `TypeSafeConfigError`      | API key, base URL, model, or configuration values                                                                 |
+| `InvalidRequestError`      | Questions, JSON input, or per-request settings                                                                    |
+| `ResponseValidationError`  | The server returned data that does not match the expected shape. Keep its `requestId` when reporting the problem. |
+| `APIConnectionError`       | Network or service reachability                                                                                   |
+| `APITimeoutError`          | The attempt exceeded `timeoutMs`; check latency or increase the timeout                                           |
+| `BadRequestError`          | HTTP `400`: request or model selection                                                                            |
+| `AuthenticationError`      | HTTP `401`: replace an invalid API key                                                                            |
+| `PermissionDeniedError`    | HTTP `403`: account access                                                                                        |
+| `NotFoundError`            | HTTP `404`: endpoint or resource                                                                                  |
+| `UnprocessableEntityError` | HTTP `422`: validation details in the response body                                                               |
+| `RateLimitError`           | HTTP `429`: wait or reduce request volume                                                                         |
+| `InternalServerError`      | HTTP `5xx`: service failure, retried by default                                                                   |
+| `APIError`                 | Any other unsuccessful HTTP status                                                                                |
 
 HTTP errors expose `status`, `headers`, `body`, and optional `requestId`. `RateLimitError` also exposes `retryAfterMs` when the server supplied a valid delay. `ResponseValidationError` and `APIConnectionError` retain their underlying `cause`; `InvalidRequestError` includes it when available.
 
@@ -376,31 +366,31 @@ HTTP errors expose `status`, `headers`, `body`, and optional `requestId`. `RateL
 
 `Schemas` contains Effect Schema values for validating data outside the client:
 
-| Export | Validates |
-| --- | --- |
-| `Schemas.Entry` | State, instructions, or descriptions |
-| `Schemas.Question` | Any supported question shape |
-| `Schemas.SystemOneRequest` | A request with its required model already supplied |
+| Export                               | Validates                                                      |
+| ------------------------------------ | -------------------------------------------------------------- |
+| `Schemas.Entry`                      | State, instructions, or descriptions                           |
+| `Schemas.Question`                   | Any supported question shape                                   |
+| `Schemas.SystemOneRequest`           | A request with its required model already supplied             |
 | `Schemas.systemOneResult(questions)` | A result matching those question IDs, labels, and score levels |
-| `Schemas.Probability` | A number from `0` to `1` |
-| `Schemas.Usage` | Input and output token counts |
-| `Schemas.Model` | One model card |
-| `Schemas.Models` | The HTTP response shape `{ models: [...] }` |
+| `Schemas.Probability`                | A number from `0` to `1`                                       |
+| `Schemas.Usage`                      | Input and output token counts                                  |
+| `Schemas.Model`                      | One model card                                                 |
+| `Schemas.Models`                     | The HTTP response shape `{ models: [...] }`                    |
 
 Defaults are exported as `DEFAULT_BASE_URL`, `DEFAULT_MODEL`, `DEFAULT_TIMEOUT_MS`, and `DEFAULT_RETRY_POLICY`. `VERSION` is the SDK version. `ENV.apiKey`, `ENV.baseURL`, and `ENV.defaultModel` hold the environment-key names listed above.
 
 <details>
 <summary>Exported TypeScript types</summary>
 
-| Group | Types |
-| --- | --- |
-| JSON values | `JsonValue`, `EntryType`, `Description` |
-| Questions | `Question`, `Questions`, `NoulQuestion`, `ChoiceQuestion<T>`, `ScoreQuestion<T>` |
-| Criteria | `ChoiceCriteria`, `ScoreCriteria` |
-| Answers | `ResultFor<T>`, `NoulResponse`, `ChoiceResponse<T>`, `ScoreResponse<T>`, `ScoreOf<T>`, `ScoreLegend<T>` |
+| Group                | Types                                                                                                           |
+| -------------------- | --------------------------------------------------------------------------------------------------------------- |
+| JSON values          | `JsonValue`, `EntryType`, `Description`                                                                         |
+| Questions            | `Question`, `Questions`, `NoulQuestion`, `ChoiceQuestion<T>`, `ScoreQuestion<T>`                                |
+| Criteria             | `ChoiceCriteria`, `ScoreCriteria`                                                                               |
+| Answers              | `ResultFor<T>`, `NoulResponse`, `ChoiceResponse<T>`, `ScoreResponse<T>`, `ScoreOf<T>`, `ScoreLegend<T>`         |
 | Requests and results | `SystemOneRequest<Q>`, `SystemOneRequestPayload`, `SystemOneResult<Q>`, `Usage`, `ModelCard`, `WithResponse<A>` |
-| Client and settings | `TypeSafeClientService`, `Models`, `TypeSafeClientConfig`, `RequestOptions`, `RetryPolicy`, `EnvVar` |
-| Errors | `TypeSafeError`, `APIResponseError` |
+| Client and settings  | `TypeSafeClientService`, `Models`, `TypeSafeClientConfig`, `RequestOptions`, `RetryPolicy`, `EnvVar`            |
+| Errors               | `TypeSafeError`, `APIResponseError`                                                                             |
 
 `ResultFor<T>` maps a question to its answer type. `ScoreOf<T>` gives the index keys for a score's levels, and `ScoreLegend<T>` maps those keys to descriptions. Literal score arrays preserve exact index keys; variable-length arrays use numeric indexing. `SystemOneRequestPayload` is a request whose `model` is required.
 
@@ -410,17 +400,17 @@ Defaults are exported as `DEFAULT_BASE_URL`, `DEFAULT_MODEL`, `DEFAULT_TIMEOUT_M
 
 This fork replaces the Promise-based API in the upstream `@typesafe-ai/sdk`.
 
-| Previously | Now |
-| --- | --- |
-| `new TypeSafeClient(options)` | Provide `TypeSafeClient.layerFetch(options)` to your program |
-| `await client.systemOne(...)` | `yield* client.systemOne(...)` inside `Effect.gen` |
-| `.withResponse()` | `systemOneWithResponse(...)` or `models.listWithResponse()` |
-| `.asResponse()` | Read `response` from a `WithResponse` result after validation |
-| Promise `.map(fn)` | `Effect.map(fn)` |
-| Per-call `signal` or `APIUserAbortError` | Cancel the Effect, or pass `signal` to `Effect.runPromise` |
-| Error-class inheritance | Match the error's tag with `Effect.catchTag` |
-| `fetch` constructor option | Supply an Effect `HttpClient` or `FetchHttpClient.Fetch` |
-| `logger`, `logLevel`, `TYPESAFE_LOG_LEVEL` | Effect Logger and `References.MinimumLogLevel` |
+| Previously                                 | Now                                                           |
+| ------------------------------------------ | ------------------------------------------------------------- |
+| `new TypeSafeClient(options)`              | Provide `TypeSafeClient.layerFetch(options)` to your program  |
+| `await client.systemOne(...)`              | `yield* client.systemOne(...)` inside `Effect.gen`            |
+| `.withResponse()`                          | `systemOneWithResponse(...)` or `models.listWithResponse()`   |
+| `.asResponse()`                            | Read `response` from a `WithResponse` result after validation |
+| Promise `.map(fn)`                         | `Effect.map(fn)`                                              |
+| Per-call `signal` or `APIUserAbortError`   | Cancel the Effect, or pass `signal` to `Effect.runPromise`    |
+| Error-class inheritance                    | Match the error's tag with `Effect.catchTag`                  |
+| `fetch` constructor option                 | Supply an Effect `HttpClient` or `FetchHttpClient.Fetch`      |
+| `logger`, `logLevel`, `TYPESAFE_LOG_LEVEL` | Effect Logger and `References.MinimumLogLevel`                |
 
 Question helpers now return plain values; invalid inputs fail when the request Effect runs. Successful HTTP responses are checked before being returned. Question names, label inference, endpoints, and request `null` values are preserved.
 
@@ -433,7 +423,22 @@ npm ci
 npm run check
 ```
 
-`check` runs lint, type checks, metadata checks, release-tool tests, SDK tests with coverage, builds, ESM/CommonJS smoke tests, and package validation. Tests use injected clients and a local HTTP server.
+| Command                | What it does                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------- |
+| `npm run build`        | Bundle ESM, CommonJS, source maps, and declarations into `dist/` with [tsdown](https://tsdown.dev/) |
+| `npm run typecheck`    | Check types without emitting files, using the native TypeScript 7 compiler                          |
+| `npm run lint`         | Run type-aware Oxlint and Effect diagnostics                                                        |
+| `npm run lint:fix`     | Apply available safe lint fixes                                                                     |
+| `npm run format`       | Format with Oxfmt                                                                                   |
+| `npm run format:check` | Check formatting without changing files                                                             |
+
+`npm ci` runs [Effect's TSGo patcher](https://github.com/Effect-TS/tsgo) for TypeScript and Oxlint. Their versions are pinned together because the patches require compatible binaries. Effect's recommended rules apply to the SDK and example; correctness checks also cover tests and release scripts.
+
+For VS Code or Cursor, install the recommended **TypeScript 7** and **Oxc** extensions, select the workspace TypeScript version, and reload the editor. The workspace settings enable the patched language server and format on save. Oxlint reports Effect diagnostics; the language server provides navigation, completions, and refactors.
+
+[ts-reset](https://www.totaltypescript.com/ts-reset) tightens global types during development through `types/reset.d.ts`. This file stays outside the published sources and declarations, so importing the SDK does not change your application's global types.
+
+`check` runs formatting, lint, type checks, metadata checks, release-tool tests, SDK tests with coverage, builds, ESM/CommonJS smoke tests, and package validation. Tests use injected clients and a local HTTP server.
 
 `npm run demo` makes a real request using `TYPESAFE_API_KEY`. `npm run test:integration` runs live API tests when that key is set. Both use your account's API quota. `npm pack` builds a fresh local archive. `npm run release:pack` also checks JSR, tests a clean installation, and writes release files to `release/`. Neither command publishes anything.
 
@@ -445,14 +450,14 @@ This package starts its own version history at **0.0.1**. npm and JSR always rec
 
 Use `release/<major>.<minor>` for each release line. The first is `release/0.0`; a future `1.2.3` belongs on `release/1.2`. `main`, `staging`, and `dev` run checks only. They cannot publish.
 
-| Change | Version rule |
-| --- | --- |
-| Compatible bug fix | Increase the patch, such as `0.0.1` to `0.0.2` |
-| New feature before 1.0 | Increase the minor, such as `0.0.2` to `0.1.0` |
-| Breaking change before 1.0 | Increase the minor and explain the migration |
-| Compatible feature from 1.0 onward | Increase the minor |
-| Breaking change from 1.0 onward | Increase the major |
-| Test release | Add a prerelease suffix, such as `0.1.0-rc.1` |
+| Change                             | Version rule                                   |
+| ---------------------------------- | ---------------------------------------------- |
+| Compatible bug fix                 | Increase the patch, such as `0.0.1` to `0.0.2` |
+| New feature before 1.0             | Increase the minor, such as `0.0.2` to `0.1.0` |
+| Breaking change before 1.0         | Increase the minor and explain the migration   |
+| Compatible feature from 1.0 onward | Increase the minor                             |
+| Breaking change from 1.0 onward    | Increase the major                             |
+| Test release                       | Add a prerelease suffix, such as `0.1.0-rc.1`  |
 
 Use exact [SemVer](https://semver.org/) versions without build metadata. The tooling checks version agreement and ordering; maintainers choose the bump based on the API change. Upstream SDK versions do not belong to this package's release history.
 
@@ -462,8 +467,8 @@ New stable releases use npm's `latest` tag. Prereleases use `next` and become Gi
 
 The repository is `stoopid-computers/effective-jev`; the publishing scope is `@compootor` on both registries.
 
-1. Ensure the publishing account can publish public packages in npm's `@compootor` organization. For the first publication, add a short-lived, narrowly scoped npm publishing token as `NPM_TOKEN` in the GitHub `release` environment. It must permit publishing with the account's 2FA policy.
-2. After the first npm version exists, configure its trusted publisher with owner `stoopid-computers`, repository `effective-jev`, workflow `publish.yml`, and environment `release`. Allow direct `npm publish`. Then remove the bootstrap token. Subsequent releases use GitHub's temporary OIDC credentials. See [npm's setup instructions](https://docs.npmjs.com/trusted-publishers/).
+1. Ensure the publishing account can manage `@compootor/effective-jev` in npm's `@compootor` organization.
+2. Configure npm's trusted publisher with owner `stoopid-computers`, repository `effective-jev`, workflow `publish.yml`, and environment `release`. Allow direct `npm publish`. This connection is already configured for this repository. Releases use GitHub's temporary OIDC credentials and require no `NPM_TOKEN` secret. See [npm's setup instructions](https://docs.npmjs.com/trusted-publishers/).
 3. Create `@compootor/effective-jev` on JSR and link it to `stoopid-computers/effective-jev` in the package settings. GitHub Actions then publishes without a JSR token. See [JSR's setup instructions](https://jsr.io/docs/publishing-packages#publishing-from-github-actions).
 4. Configure the GitHub `release` environment to allow version tags matching `v*`. Protect the `release/**` branches and `v*` tags against deletion or force updates. Only maintainers who can approve releases should be able to push release tags.
 

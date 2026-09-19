@@ -35,7 +35,7 @@ const textConfig = (
         Config.withDefault(fallback),
         Effect.map((text) => text.trim() || fallback),
       )
-    : Schema.decodeUnknownEffect(Schema.String)(value);
+    : Schema.decodeEffect(Schema.String)(value);
 
 /** Resolve explicit settings before consulting the active ConfigProvider. */
 export const resolveConfig = (
@@ -55,7 +55,7 @@ export const resolveConfig = (
           )
         : typeof options.apiKey === "string"
           ? Redacted.make(options.apiKey)
-          : yield* Schema.decodeUnknownEffect(Schema.Redacted(Schema.String))(options.apiKey);
+          : yield* Schema.decodeEffect(Schema.Redacted(Schema.String))(options.apiKey);
     if (!Redacted.value(apiKey).trim()) {
       return yield* new TypeSafeConfigError({ message: `Provide apiKey or set ${ENV.apiKey}.` });
     }
@@ -82,10 +82,8 @@ export const resolveConfig = (
         }),
     });
     const defaultModel = yield* textConfig(options.defaultModel, ENV.defaultModel, DEFAULT_MODEL);
-    yield* Schema.decodeUnknownEffect(Schema.NonEmptyString)(defaultModel);
-    const timeout = yield* Schema.decodeUnknownEffect(Timeout)(
-      options.timeout ?? DEFAULT_TIMEOUT_MS,
-    );
+    yield* Schema.decodeEffect(Schema.NonEmptyString)(defaultModel);
+    const timeout = yield* Schema.decodeEffect(Timeout)(options.timeout ?? DEFAULT_TIMEOUT_MS);
     const retry = yield* resolveRetryPolicy(DEFAULT_RETRY_POLICY, options.retry);
     return {
       apiKey,

@@ -41,7 +41,8 @@ describe("Effect API inference", () => {
   });
 
   it("retains metadata inference and supports dynamic score arrays", () => {
-    const criteria: ScoreCriteria = ["a", "b", ...["c"]];
+    const remainingCriteria = ["c"];
+    const criteria: ScoreCriteria = ["a", "b", ...remainingCriteria];
     const request = client.systemOneWithResponse({
       state: null,
       questions: { level: score(null, criteria) },
@@ -64,5 +65,16 @@ describe("Effect API inference", () => {
     noul(42);
     // @ts-expect-error request effects are not Promises
     client.models.list().then(() => {});
+  });
+});
+
+describe("development type defaults", () => {
+  it("treats parsed JSON as unknown", () => {
+    expectTypeOf(JSON.parse('{"ok":true}')).toBeUnknown();
+  });
+
+  it("narrows falsy values with filter(Boolean)", () => {
+    const values: Array<string | undefined> = ["ready", undefined];
+    expectTypeOf(values.filter(Boolean)).toEqualTypeOf<string[]>();
   });
 });

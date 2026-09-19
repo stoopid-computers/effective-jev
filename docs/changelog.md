@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.0.2 (2026-09-19)
+
+This patch adds the Effect development tools and tightens numeric validation. The public API and pinned Effect version are unchanged.
+
+- Use finite-number schemas for scores, probabilities, retry jitter, and numeric error fields.
+- Replace Biome with Oxfmt and type-aware Oxlint, including Effect's recommended rules for SDK code.
+- Patch the native TypeScript compiler and Oxlint with Effect TSGo during installation, and add editor settings for its language server.
+- Add ts-reset for development. Published declarations leave consumer global types unchanged.
+- Document the development commands and keep tsdown builds, ESM/CommonJS consumer checks, and JSR source checks in the release pipeline.
+- Publish to npm through the saved GitHub trusted publisher without a bootstrap token.
+
 ## v0.0.1 (2026-09-19)
 
 First release of @compootor/effective-jev, an independent fork of [TypeSafe's JavaScript SDK](https://github.com/typesafe-ai/typesafe-sdk-js). This package starts its own version history at 0.0.1.

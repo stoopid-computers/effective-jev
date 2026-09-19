@@ -55,7 +55,7 @@ export const SystemOneRequest: Schema.Codec<SystemOneRequestPayload> = Schema.St
 });
 
 /** A probability or confidence value from zero through one. */
-export const Probability: Schema.Codec<number> = Schema.Number.check(
+export const Probability: Schema.Codec<number> = Schema.Finite.check(
   Schema.isBetween({ minimum: 0, maximum: 1 }),
 );
 
@@ -104,7 +104,7 @@ export const systemOneResult = <Q extends Questions>(
         const indices = question.criteria.map((_, index) => String(index));
         return Schema.Struct({
           type: Schema.Literal("score"),
-          score: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: indices.length - 1 })),
+          score: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: indices.length - 1 })),
           confidence: Probability,
           legend: Schema.Struct(
             fieldsFor(indices, (_, index) =>

@@ -3,7 +3,7 @@ import { expectTypeOf, it } from "vitest";
 import {
   choice,
   score,
-  TypeSafeClient,
+  type TypeSafeClient,
   type TypeSafeClientService,
   type TypeSafeError,
 } from "../../dist/index.mjs";
@@ -21,5 +21,9 @@ it("preserves answer and error inference in emitted declarations", () => {
   expectTypeOf<Result["answers"]["tone"]["choice"]>().toEqualTypeOf<"warm" | "cold">();
   expectTypeOf<Result["answers"]["level"]["legend"]["0"]>().toEqualTypeOf<"low">();
   expectTypeOf<Effect.Error<typeof operation>>().toEqualTypeOf<TypeSafeError>();
-  expectTypeOf(TypeSafeClient.layerFetch).toBeFunction();
+  expectTypeOf<typeof TypeSafeClient.layerFetch>().toBeFunction();
+});
+
+it("does not change consumer global types through the SDK declarations", () => {
+  expectTypeOf(JSON.parse('{"ok":true}')).toBeAny();
 });

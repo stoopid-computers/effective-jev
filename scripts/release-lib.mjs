@@ -158,19 +158,21 @@ export function sourceManifest(cwd = process.cwd(), published = false) {
     "LICENSE",
     "README.md",
     "jsr.json",
-    ...readdirSync(join(cwd, "src"), { recursive: true })
+    ...readdirSync(join(cwd, "src"), { recursive: true, encoding: "utf8" })
       .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))
       .map((file) => `src/${file}`),
   ];
   return Object.fromEntries(
-    files.sort().map((file) => {
-      const original = readFileSync(join(cwd, file));
-      const bytes =
-        published && file.endsWith(".ts")
-          ? Buffer.from(jsrImports(original.toString("utf8"), imports))
-          : original;
-      return [`/${file}`, { size: bytes.length, checksum: hash(bytes) }];
-    }),
+    files
+      .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+      .map((file) => {
+        const original = readFileSync(join(cwd, file));
+        const bytes =
+          published && file.endsWith(".ts")
+            ? Buffer.from(jsrImports(original.toString("utf8"), imports))
+            : original;
+        return [`/${file}`, { size: bytes.length, checksum: hash(bytes) }];
+      }),
   );
 }
 

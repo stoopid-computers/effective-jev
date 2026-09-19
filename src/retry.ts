@@ -22,7 +22,7 @@ const retryPolicy: Schema.Codec<RetryPolicy> = Schema.Struct({
   maxRetries: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   backoffInitialMs: nonNegative,
   backoffMaxMs: nonNegative,
-  backoffJitter: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  backoffJitter: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
   httpStatuses: Schema.ReadonlySet(
     Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 599 })),
   ),
@@ -37,7 +37,7 @@ export const resolveRetryPolicy = (
   base: RetryPolicy,
   overrides: Partial<RetryPolicy> | undefined,
 ): Effect.Effect<RetryPolicy, Schema.SchemaError> =>
-  Schema.decodeUnknownEffect(retryPolicy)({
+  Schema.decodeEffect(retryPolicy)({
     ...base,
     ...Object.fromEntries(
       Object.entries(overrides ?? {}).filter(([, value]) => value !== undefined),

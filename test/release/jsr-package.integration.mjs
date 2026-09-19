@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 import { hash, sourceManifest } from "../../scripts/release-lib.mjs";
 
 // Exercise the real, pinned JSR CLI against a local receiver. Nothing reaches a registry.
-test("JSR's actual upload matches the file hashes used for release verification", async (t) => {
+void test("JSR's actual upload matches the file hashes used for release verification", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "effective-jev-jsr-upload-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   let upload;

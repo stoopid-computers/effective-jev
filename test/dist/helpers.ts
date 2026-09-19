@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
+import type * as sdkExports from "../../dist/index.mjs";
 
 export const pkg: { name: string; version: string } = JSON.parse(
   readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
@@ -20,7 +21,7 @@ export const BODY = {
 };
 
 /** Exercise built exports against an injected fetch transport. */
-export const roundTrip = async (sdk: typeof import("../../dist/index.mjs")): Promise<void> => {
+export const roundTrip = async (sdk: typeof sdkExports): Promise<void> => {
   const fetch: typeof globalThis.fetch = async () =>
     new Response(JSON.stringify(BODY), { headers: { "x-typesafe-request-id": "req_dist" } });
   const layer = sdk.TypeSafeClient.layerFetch({ apiKey: "test" }).pipe(

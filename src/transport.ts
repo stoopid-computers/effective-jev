@@ -31,9 +31,7 @@ export const makeTransport = (config: ResolvedConfig, http: HttpClient.HttpClien
   const client = HttpClient.withScope(http);
   const request: Transport["request"] = (method, path, schema, options = {}, body) =>
     Effect.gen(function* () {
-      const timeout = yield* Schema.decodeUnknownEffect(Timeout)(
-        options.timeout ?? config.timeout,
-      ).pipe(
+      const timeout = yield* Schema.decodeEffect(Timeout)(options.timeout ?? config.timeout).pipe(
         Effect.mapError(
           (cause) =>
             new InvalidRequestError({ message: `Invalid timeout: ${cause.message}`, cause }),
@@ -72,9 +70,9 @@ export const makeTransport = (config: ResolvedConfig, http: HttpClient.HttpClien
           Effect.annotateLogs({ method, path, status: response.status, requestId, attempt: count }),
         );
         if (response.status < 200 || response.status >= 300) {
-          const parsed = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+          const parsed = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
             text,
-          ).pipe(Effect.catch(() => Effect.succeed(text.length === 0 ? undefined : text)));
+          ).pipe(Effect.orElseSucceed(() => (text.length === 0 ? undefined : text)));
           return yield* fromResponse(
             response.status,
             parsed,
@@ -82,7 +80,7 @@ export const makeTransport = (config: ResolvedConfig, http: HttpClient.HttpClien
             parseRetryAfter(response.headers, yield* Clock.currentTimeMillis),
           );
         }
-        const data = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(text).pipe(
+        const data = yield* Schema.decodeEffect(Schema.fromJsonString(schema))(text).pipe(
           Effect.mapError(
             (cause) =>
               new ResponseValidationError({

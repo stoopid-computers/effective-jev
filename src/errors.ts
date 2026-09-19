@@ -32,12 +32,12 @@ export class APIConnectionError extends Schema.TaggedError<APIConnectionError>()
 /** An attempt exceeded its timeout, including response body delivery. */
 export class APITimeoutError extends Schema.TaggedError<APITimeoutError>()("APITimeoutError", {
   message: Schema.String,
-  timeoutMs: Schema.Number,
+  timeoutMs: Schema.Finite,
 }) {}
 
 const apiErrorFields = {
   message: Schema.String,
-  status: Schema.Number,
+  status: Schema.Finite,
   headers: Schema.Record(Schema.String, Schema.String),
   body: Schema.Unknown,
   requestId: Schema.UndefinedOr(Schema.String),
@@ -73,7 +73,7 @@ export class UnprocessableEntityError extends Schema.TaggedError<UnprocessableEn
 /** HTTP 429, with the server's requested delay in milliseconds when valid. */
 export class RateLimitError extends Schema.TaggedError<RateLimitError>()("RateLimitError", {
   ...apiErrorFields,
-  retryAfterMs: Schema.UndefinedOr(Schema.Number),
+  retryAfterMs: Schema.UndefinedOr(Schema.Finite),
 }) {}
 /** HTTP 5xx. */
 export class InternalServerError extends Schema.TaggedError<InternalServerError>()(

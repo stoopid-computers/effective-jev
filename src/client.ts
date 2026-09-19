@@ -61,7 +61,7 @@ export class TypeSafeClient extends Context.Service<TypeSafeClient, TypeSafeClie
                 }),
             ),
           );
-          const payload = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RequestSchema))(
+          const payload = yield* Schema.decodeEffect(Schema.fromJsonString(RequestSchema))(
             body,
           ).pipe(
             Effect.mapError(

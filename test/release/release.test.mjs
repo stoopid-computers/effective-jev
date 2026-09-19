@@ -91,7 +91,7 @@ function fixture(t, upstream = false) {
 const validate = (cwd, extra = {}) => validateRelease({ cwd, env: {}, ...extra });
 
 for (const version of ["0.0.1", "1.2.3", "2.0.0-rc.1", "0.1.0-beta.12"]) {
-  test(`accepts canonical SemVer ${version}`, () => {
+  void test(`accepts canonical SemVer ${version}`, () => {
     const info = releaseInfo(version);
     assert.equal(info.tag, `v${version}`);
     assert.equal(info.prerelease, version.includes("-"));
@@ -106,10 +106,11 @@ for (const version of [
   " 1.0.0",
   "latest",
 ]) {
-  test(`rejects non-release version ${version}`, () => assert.throws(() => releaseInfo(version)));
+  void test(`rejects non-release version ${version}`, () =>
+    assert.throws(() => releaseInfo(version)));
 }
 
-test("validates scoped metadata and rejects mismatched lockfile versions", (t) => {
+void test("validates scoped metadata and rejects mismatched lockfile versions", (t) => {
   const cwd = fixture(t);
   assert.equal(metadata(cwd).name, packageName);
   const lock = json(join(cwd, "package-lock.json"));
@@ -117,7 +118,7 @@ test("validates scoped metadata and rejects mismatched lockfile versions", (t) =
   writeJson(join(cwd, "package-lock.json"), lock);
   assert.throws(() => metadata(cwd), /version must match/);
 });
-test("rejects a different registry scope", (t) => {
+void test("rejects a different registry scope", (t) => {
   const cwd = fixture(t);
   const jsr = json(join(cwd, "jsr.json"));
   jsr.name = "@other/effective-jev";
@@ -125,24 +126,24 @@ test("rejects a different registry scope", (t) => {
   assert.throws(() => metadata(cwd), /must use/);
 });
 for (const branch of ["main", "staging", "dev", "release/0.1", "release/0.0-fix"]) {
-  test(`refuses releases from ${branch}`, (t) => {
+  void test(`refuses releases from ${branch}`, (t) => {
     const cwd = fixture(t);
     git(cwd, "switch", "-qc", branch);
     assert.throws(() => validate(cwd), /Use the release\/0.0 branch/);
   });
 }
-test("accepts a tag on its release branch and ignores upstream version history", (t) => {
+void test("accepts a tag on its release branch and ignores upstream version history", (t) => {
   const cwd = fixture(t, true);
   git(cwd, "tag", "-a", "v0.0.1", "-m", "Release");
   const info = validate(cwd, { ref: "refs/tags/v0.0.1", remote: true });
   assert.equal(info.version, "0.0.1");
 });
-test("rejects a tag with a different version", (t) => {
+void test("rejects a tag with a different version", (t) => {
   const cwd = fixture(t);
   git(cwd, "tag", "v0.0.2");
   assert.throws(() => validate(cwd, { ref: "refs/tags/v0.0.2" }), /Tag must exactly match/);
 });
-test("rejects a tag that exists only on main", (t) => {
+void test("rejects a tag that exists only on main", (t) => {
   const cwd = fixture(t);
   git(cwd, "switch", "-qc", "main");
   writeFileSync(join(cwd, "extra.txt"), "Main-only commit\n");
@@ -150,12 +151,12 @@ test("rejects a tag that exists only on main", (t) => {
   git(cwd, "tag", "v0.0.1");
   assert.throws(() => validate(cwd, { ref: "refs/tags/v0.0.1", remote: true }));
 });
-test("rejects dirty release sources", (t) => {
+void test("rejects dirty release sources", (t) => {
   const cwd = fixture(t);
   writeFileSync(join(cwd, "README.md"), "Uncommitted\n");
   assert.throws(() => validate(cwd), /Commit the release changes/);
 });
-test("publishing requires GitHub, the right repository, and a tag", (t) => {
+void test("publishing requires GitHub, the right repository, and a tag", (t) => {
   const cwd = fixture(t);
   assert.throws(() => validate(cwd, { publish: true }), /GitHub release workflow/);
   assert.throws(
@@ -177,13 +178,13 @@ test("publishing requires GitHub, the right repository, and a tag", (t) => {
     /project repository/,
   );
 });
-test("does not allow this package's version history to go backwards", (t) => {
+void test("does not allow this package's version history to go backwards", (t) => {
   const cwd = fixture(t);
   git(cwd, "tag", "v0.0.2");
   assert.throws(() => validate(cwd), /must be newer/);
 });
 
-test("reads prerelease notes and rejects missing, duplicate, empty, and invalid entries", () => {
+void test("reads prerelease notes and rejects missing, duplicate, empty, and invalid entries", () => {
   const heading = "## v0.0.2-rc.1 (2026-09-19)\n";
   assert.equal(
     releaseNotes(`# Changelog\n\n${heading}\nFix timeout handling.\n`, "0.0.2-rc.1").notes,
@@ -196,7 +197,7 @@ test("reads prerelease notes and rejects missing, duplicate, empty, and invalid 
   assert.throws(() => releaseNotes("## v0.0.1 (2026-02-30)\nFix.\n", "0.0.1"));
   assert.throws(() => releaseNotes("## v0.0.2 (2026-09-19)\nFix.\n", "0.0.1"));
 });
-test("prepare updates both registries, runtime, lockfile, and notes together", (t) => {
+void test("prepare updates both registries, runtime, lockfile, and notes together", (t) => {
   const cwd = fixture(t);
   const notes = join(cwd, "release-notes.txt");
   writeFileSync(notes, "Fix retry timing.\n");
@@ -208,7 +209,7 @@ test("prepare updates both registries, runtime, lockfile, and notes together", (
   assert.equal(metadata(cwd).version, "0.0.2-rc.1");
   assert.match(readFileSync(join(cwd, "docs/changelog.md"), "utf8"), /## v0\.0\.2-rc\.1/);
 });
-test("failed preparation leaves metadata untouched", (t) => {
+void test("failed preparation leaves metadata untouched", (t) => {
   const cwd = fixture(t);
   const before = readFileSync(join(cwd, "package.json"), "utf8");
   assert.throws(() =>
@@ -219,7 +220,7 @@ test("failed preparation leaves metadata untouched", (t) => {
   );
   assert.equal(readFileSync(join(cwd, "package.json"), "utf8"), before);
 });
-test("pack verification detects changed tarballs and JSR sources", (t) => {
+void test("pack verification detects changed tarballs and JSR sources", (t) => {
   const cwd = fixture(t);
   const info = metadata(cwd);
   mkdirSync(join(cwd, "release"));
@@ -242,7 +243,7 @@ test("pack verification detects changed tarballs and JSR sources", (t) => {
 
 const info = { ...releaseInfo("0.0.1"), tarball: "/tmp/test.tgz", integrity: "sha512-test" };
 const npmVersion = { name: info.name, version: info.version, dist: { integrity: info.integrity } };
-test("npm uses latest, next, or a maintenance channel without downgrading latest", () => {
+void test("npm uses latest, next, or a maintenance channel without downgrading latest", () => {
   assert.equal(npmTag(info), "latest");
   assert.equal(
     npmTag(info, { versions: { "1.0.0": {} }, "dist-tags": { latest: "1.0.0" } }),
@@ -254,13 +255,13 @@ test("npm uses latest, next, or a maintenance channel without downgrading latest
     "release-0.1-next",
   );
 });
-test("npm retry skips an identical published tarball", async () => {
+void test("npm retry skips an identical published tarball", async () => {
   await publishNpm(info, {
     read: async () => npmVersion,
     execute: () => assert.fail("No republish"),
   });
 });
-test("npm retry rejects a different published tarball", async () => {
+void test("npm retry rejects a different published tarball", async () => {
   await assert.rejects(
     publishNpm(info, {
       read: async () => ({ ...npmVersion, dist: { integrity: "different" } }),
@@ -269,7 +270,7 @@ test("npm retry rejects a different published tarball", async () => {
     /different contents/,
   );
 });
-test("npm publishes the exact artifact and verifies the registry result", async () => {
+void test("npm publishes the exact artifact and verifies the registry result", async () => {
   let published = false;
   await publishNpm(info, {
     read: async (url) =>
@@ -285,7 +286,7 @@ test("npm publishes the exact artifact and verifies the registry result", async 
   });
   assert.equal(published, true);
 });
-test("npm refuses a new version below an existing version on the same channel", async () => {
+void test("npm refuses a new version below an existing version on the same channel", async () => {
   await assert.rejects(
     publishNpm(info, {
       read: async (url) =>
@@ -295,20 +296,20 @@ test("npm refuses a new version below an existing version on the same channel", 
     /already exists/,
   );
 });
-test("GitHub latest follows the verified npm stable version", async () => {
+void test("GitHub latest follows the verified npm stable version", async () => {
   const read = async (url) =>
     url.endsWith(`/${info.version}`) ? npmVersion : { "dist-tags": { latest: "1.0.0" } };
   assert.equal(await verifyNpm(info, read), false);
 });
 const manifest = { "/src/index.ts": { checksum: "sha256-test", size: 4 } };
-test("JSR retries verify the full published manifest", async () => {
+void test("JSR retries verify the full published manifest", async () => {
   await publishJsr(info, manifest, {
     read: async (url) =>
       url.endsWith("_meta.json") ? { manifest } : { versions: { "0.0.1": {} } },
     execute: () => assert.fail("No republish"),
   });
 });
-test("JSR refuses conflicting or yanked versions", async () => {
+void test("JSR refuses conflicting or yanked versions", async () => {
   await assert.rejects(
     publishJsr(info, manifest, {
       read: async () => ({ manifest: {} }),
@@ -323,7 +324,7 @@ test("JSR refuses conflicting or yanked versions", async () => {
     /yanked/,
   );
 });
-test("JSR first publish verifies uploaded source hashes", async () => {
+void test("JSR first publish verifies uploaded source hashes", async () => {
   let published = false;
   await publishJsr(info, manifest, {
     read: async (url) =>
@@ -340,7 +341,7 @@ test("JSR first publish verifies uploaded source hashes", async () => {
     },
   });
 });
-test("registry failures cannot be mistaken for an unpublished version", async () => {
+void test("registry failures cannot be mistaken for an unpublished version", async () => {
   await assert.rejects(
     registryJson(
       "https://registry.invalid/package",
