@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.0.3 (2026-09-19)
+
+JSR can now analyze the SDK's public types and generate its declarations and API documentation without the slow-types override.
+
+- Add explicit base-class types for `TypeSafeClient` and the tagged error classes, preserving their Effect service and schema APIs.
+- Remove `--allow-slow-types` from JSR validation, publication, and upload tests so CI catches future regressions.
+
+This patch changes type declarations and release checks. Request behavior, imports, and the pinned Effect version stay the same.
+
 ## v0.0.2 (2026-09-19)
 
 This patch adds the Effect development tools and tightens numeric validation. The public API and pinned Effect version are unchanged.

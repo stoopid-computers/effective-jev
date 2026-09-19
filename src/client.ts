@@ -29,10 +29,16 @@ export interface TypeSafeClientService {
   ) => Effect.Effect<WithResponse<SystemOneResult<Q>>, TypeSafeError>;
 }
 
-/** An Effect service for the TypeSafe Jev API. */
-export class TypeSafeClient extends Context.Service<TypeSafeClient, TypeSafeClientService>()(
+const TypeSafeClientBase: Context.ServiceClass<
+  TypeSafeClient,
   "@compootor/effective-jev/TypeSafeClient",
-) {
+  TypeSafeClientService
+> = Context.Service<TypeSafeClient, TypeSafeClientService>()(
+  "@compootor/effective-jev/TypeSafeClient",
+);
+
+/** An Effect service for the TypeSafe Jev API. */
+export class TypeSafeClient extends TypeSafeClientBase {
   /** Construct the service with configuration and an injected Effect HttpClient. */
   static make(
     options: TypeSafeClientConfig = {},

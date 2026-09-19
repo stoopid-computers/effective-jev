@@ -1,6 +1,6 @@
 {
   "name": "@compootor/effective-jev",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Effect v4 SDK for the TypeSafe Jev API",
   "license": "MIT",
   "author": "evinism",
@@ -51,7 +51,7 @@
     "docs": "npm ci --prefix docs --ignore-scripts --no-audit --no-fund && npm run --prefix docs build",
     "prepack": "npm run build",
     "test:release": "node --test test/release/*.test.mjs",
-    "check:jsr": "jsr publish --dry-run --allow-dirty --allow-slow-types && node --test test/release/jsr-package.integration.mjs",
+    "check:jsr": "jsr publish --dry-run --allow-dirty && node --test test/release/jsr-package.integration.mjs",
     "release:prepare": "node scripts/release.mjs prepare",
     "release:check": "node scripts/release.mjs check",
     "release:pack": "npm run check && npm run check:jsr && node scripts/release.mjs pack && node scripts/test-tarball.mjs",

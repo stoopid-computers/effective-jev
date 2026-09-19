@@ -26,7 +26,7 @@ export async function publishJsr(info, manifest, { read = registryJson, execute 
       "This JSR version contains different files. Choose a new version.",
     );
   } else {
-    execute("npm", ["exec", "--no", "--", "jsr", "publish", "--allow-slow-types"]);
+    execute("npm", ["exec", "--no", "--", "jsr", "publish"]);
   }
   await verifyJsr(info, manifest, read);
   console.log(`Verified ${info.name}@${info.version} on JSR.`);

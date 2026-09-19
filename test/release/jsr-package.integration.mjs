@@ -53,7 +53,6 @@ void test("JSR's actual upload matches the file hashes used for release verifica
         "local-package-test",
         "--no-provenance",
         "--allow-dirty",
-        "--allow-slow-types",
       ],
       {
         cwd: process.cwd(),

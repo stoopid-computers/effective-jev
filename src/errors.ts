@@ -1,41 +1,84 @@
-import { Schema } from "effect";
+import { type Cause, Schema } from "effect";
 import type { Headers } from "effect/unstable/http";
 
-/** Invalid client configuration, including missing credentials. */
-export class TypeSafeConfigError extends Schema.TaggedError<TypeSafeConfigError>()(
+// Explicit base types let JSR generate declarations for Effect's class factories.
+type ErrorClass<Self, Tag extends string, Fields extends Schema.Struct.Fields> = Schema.Class<
+  Self,
+  Schema.TaggedStruct<Tag, Fields>,
+  Cause.YieldableError
+>;
+
+const TypeSafeConfigErrorBase: ErrorClass<
+  TypeSafeConfigError,
   "TypeSafeConfigError",
-  { message: Schema.String },
-) {}
+  { readonly message: Schema.String }
+> = Schema.TaggedError<TypeSafeConfigError>()("TypeSafeConfigError", { message: Schema.String });
+
+/** Invalid client configuration, including missing credentials. */
+export class TypeSafeConfigError extends TypeSafeConfigErrorBase {}
+
+const InvalidRequestErrorBase: ErrorClass<
+  InvalidRequestError,
+  "InvalidRequestError",
+  { readonly message: Schema.String; readonly cause: Schema.optional<Schema.Defect> }
+> = Schema.TaggedError<InvalidRequestError>()("InvalidRequestError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+});
 
 /** Invalid questions, request options, or a body that cannot be encoded as JSON. */
-export class InvalidRequestError extends Schema.TaggedError<InvalidRequestError>()(
-  "InvalidRequestError",
-  { message: Schema.String, cause: Schema.optional(Schema.Defect()) },
-) {}
+export class InvalidRequestError extends InvalidRequestErrorBase {}
 
-/** A successful HTTP response that does not match the requested answer schema. */
-export class ResponseValidationError extends Schema.TaggedError<ResponseValidationError>()(
+const ResponseValidationErrorBase: ErrorClass<
+  ResponseValidationError,
   "ResponseValidationError",
   {
-    message: Schema.String,
-    cause: Schema.Defect(),
-    requestId: Schema.UndefinedOr(Schema.String),
-  },
-) {}
+    readonly message: Schema.String;
+    readonly cause: Schema.Defect;
+    readonly requestId: Schema.UndefinedOr<Schema.String>;
+  }
+> = Schema.TaggedError<ResponseValidationError>()("ResponseValidationError", {
+  message: Schema.String,
+  cause: Schema.Defect(),
+  requestId: Schema.UndefinedOr(Schema.String),
+});
+
+/** A successful HTTP response that does not match the requested answer schema. */
+export class ResponseValidationError extends ResponseValidationErrorBase {}
+
+const APIConnectionErrorBase: ErrorClass<
+  APIConnectionError,
+  "APIConnectionError",
+  { readonly message: Schema.String; readonly cause: Schema.Defect }
+> = Schema.TaggedError<APIConnectionError>()("APIConnectionError", {
+  message: Schema.String,
+  cause: Schema.Defect(),
+});
 
 /** The transport failed while sending a request or receiving its body. */
-export class APIConnectionError extends Schema.TaggedError<APIConnectionError>()(
-  "APIConnectionError",
-  { message: Schema.String, cause: Schema.Defect() },
-) {}
+export class APIConnectionError extends APIConnectionErrorBase {}
 
-/** An attempt exceeded its timeout, including response body delivery. */
-export class APITimeoutError extends Schema.TaggedError<APITimeoutError>()("APITimeoutError", {
+const APITimeoutErrorBase: ErrorClass<
+  APITimeoutError,
+  "APITimeoutError",
+  { readonly message: Schema.String; readonly timeoutMs: Schema.Finite }
+> = Schema.TaggedError<APITimeoutError>()("APITimeoutError", {
   message: Schema.String,
   timeoutMs: Schema.Finite,
-}) {}
+});
 
-const apiErrorFields = {
+/** An attempt exceeded its timeout, including response body delivery. */
+export class APITimeoutError extends APITimeoutErrorBase {}
+
+type APIErrorFields = {
+  message: Schema.String;
+  status: Schema.Finite;
+  headers: Schema.$Record<Schema.String, Schema.String>;
+  body: Schema.Unknown;
+  requestId: Schema.UndefinedOr<Schema.String>;
+};
+
+const apiErrorFields: APIErrorFields = {
   message: Schema.String,
   status: Schema.Finite,
   headers: Schema.Record(Schema.String, Schema.String),
@@ -43,43 +86,73 @@ const apiErrorFields = {
   requestId: Schema.UndefinedOr(Schema.String),
 };
 
+const APIErrorBase: ErrorClass<APIError, "APIError", APIErrorFields> =
+  Schema.TaggedError<APIError>()("APIError", apiErrorFields);
+
 /** An HTTP error without a more specific status tag. */
-export class APIError extends Schema.TaggedError<APIError>()("APIError", apiErrorFields) {}
+export class APIError extends APIErrorBase {}
+
+const BadRequestErrorBase: ErrorClass<BadRequestError, "BadRequestError", APIErrorFields> =
+  Schema.TaggedError<BadRequestError>()("BadRequestError", apiErrorFields);
+
 /** HTTP 400. */
-export class BadRequestError extends Schema.TaggedError<BadRequestError>()(
-  "BadRequestError",
-  apiErrorFields,
-) {}
-/** HTTP 401. */
-export class AuthenticationError extends Schema.TaggedError<AuthenticationError>()(
+export class BadRequestError extends BadRequestErrorBase {}
+
+const AuthenticationErrorBase: ErrorClass<
+  AuthenticationError,
   "AuthenticationError",
-  apiErrorFields,
-) {}
-/** HTTP 403. */
-export class PermissionDeniedError extends Schema.TaggedError<PermissionDeniedError>()(
+  APIErrorFields
+> = Schema.TaggedError<AuthenticationError>()("AuthenticationError", apiErrorFields);
+
+/** HTTP 401. */
+export class AuthenticationError extends AuthenticationErrorBase {}
+
+const PermissionDeniedErrorBase: ErrorClass<
+  PermissionDeniedError,
   "PermissionDeniedError",
-  apiErrorFields,
-) {}
+  APIErrorFields
+> = Schema.TaggedError<PermissionDeniedError>()("PermissionDeniedError", apiErrorFields);
+
+/** HTTP 403. */
+export class PermissionDeniedError extends PermissionDeniedErrorBase {}
+
+const NotFoundErrorBase: ErrorClass<NotFoundError, "NotFoundError", APIErrorFields> =
+  Schema.TaggedError<NotFoundError>()("NotFoundError", apiErrorFields);
+
 /** HTTP 404. */
-export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
-  "NotFoundError",
-  apiErrorFields,
-) {}
-/** HTTP 422. */
-export class UnprocessableEntityError extends Schema.TaggedError<UnprocessableEntityError>()(
+export class NotFoundError extends NotFoundErrorBase {}
+
+const UnprocessableEntityErrorBase: ErrorClass<
+  UnprocessableEntityError,
   "UnprocessableEntityError",
-  apiErrorFields,
-) {}
-/** HTTP 429, with the server's requested delay in milliseconds when valid. */
-export class RateLimitError extends Schema.TaggedError<RateLimitError>()("RateLimitError", {
+  APIErrorFields
+> = Schema.TaggedError<UnprocessableEntityError>()("UnprocessableEntityError", apiErrorFields);
+
+/** HTTP 422. */
+export class UnprocessableEntityError extends UnprocessableEntityErrorBase {}
+
+const RateLimitErrorBase: ErrorClass<
+  RateLimitError,
+  "RateLimitError",
+  Readonly<APIErrorFields> & {
+    readonly retryAfterMs: Schema.UndefinedOr<Schema.Finite>;
+  }
+> = Schema.TaggedError<RateLimitError>()("RateLimitError", {
   ...apiErrorFields,
   retryAfterMs: Schema.UndefinedOr(Schema.Finite),
-}) {}
-/** HTTP 5xx. */
-export class InternalServerError extends Schema.TaggedError<InternalServerError>()(
+});
+
+/** HTTP 429, with the server's requested delay in milliseconds when valid. */
+export class RateLimitError extends RateLimitErrorBase {}
+
+const InternalServerErrorBase: ErrorClass<
+  InternalServerError,
   "InternalServerError",
-  apiErrorFields,
-) {}
+  APIErrorFields
+> = Schema.TaggedError<InternalServerError>()("InternalServerError", apiErrorFields);
+
+/** HTTP 5xx. */
+export class InternalServerError extends InternalServerErrorBase {}
 
 /** All failures returned for non-success HTTP statuses. */
 export type APIResponseError =
